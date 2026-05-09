@@ -1,5 +1,6 @@
 """Combat simulation primitives."""
 
+from combat.action_economy import ActionEconomy, reset_turn_resources
 from combat.actions import (
     ActionResult,
     AttackAction,
@@ -8,6 +9,7 @@ from combat.actions import (
     MoveAction,
 )
 from combat.environment import CombatEnvironment
+from combat.encounter_generator import EncounterGenerator
 from combat.map import GridMap
 from combat.models import (
     Ability,
@@ -21,9 +23,17 @@ from combat.models import (
     Team,
     WeaponAttack,
 )
+from combat.presets import (
+    FighterArcher,
+    FighterChampionGreatsword,
+    Goblin,
+    Orc,
+    create_test_encounter,
+)
 
 __all__ = [
     "Ability",
+    "ActionEconomy",
     "ActionResult",
     "AttackAction",
     "Character",
@@ -32,10 +42,17 @@ __all__ = [
     "CombatState",
     "Condition",
     "Enemy",
-    "GridMap",
     "EndTurnAction",
+    "EncounterGenerator",
+    "FighterArcher",
+    "FighterChampionGreatsword",
+    "Goblin",
+    "GridMap",
     "MoveAction",
+    "Orc",
     "Position",
+    "create_test_encounter",
+    "reset_turn_resources",
     "SpellAbility",
     "Stats",
     "Team",

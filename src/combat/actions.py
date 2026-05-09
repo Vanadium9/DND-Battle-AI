@@ -40,9 +40,12 @@ class MoveAction(CombatAction):
         actor = _get_character(combat_state, self.actor_id)
         if actor is None or actor.is_dead or combat_state.grid_map is None:
             return False
+        movement_cost = _distance(actor.position, self.destination, combat_state)
+        if movement_cost > actor.action_economy.movement_remaining:
+            return False
         return self.destination in combat_state.grid_map.movement_cells(
             actor.position,
-            actor.speed,
+            actor.action_economy.movement_remaining,
             combat_state.characters,
         )
 
@@ -54,10 +57,16 @@ class MoveAction(CombatAction):
             return ActionResult(False, f"{actor.name} cannot move to {self.destination}.")
 
         previous_position = actor.position
+        movement_cost = _distance(previous_position, self.destination, combat_state)
         actor.position = self.destination
+        actor.action_economy.spend_movement(movement_cost)
         return ActionResult(
             True,
-            f"{actor.name} moves from {previous_position} to {self.destination}.",
+            (
+                f"{actor.name} moves from {previous_position} to {self.destination}. "
+                f"Movement spent: {movement_cost}, "
+                f"movement remaining: {actor.action_economy.movement_remaining}."
+            ),
         )
 
 
@@ -75,7 +84,12 @@ class AttackAction(CombatAction):
 
         if actor is None or target is None or weapon is None:
             return False
-        if actor.is_dead or target.is_dead or not weapon.available:
+        if (
+            actor.is_dead
+            or target.is_dead
+            or not weapon.available
+            or not actor.action_economy.action_available
+        ):
             return False
         return _distance(actor.position, target.position, combat_state) <= weapon.range
 
@@ -99,6 +113,7 @@ class AttackAction(CombatAction):
                 f"{actor.name} cannot attack {target.name} with {weapon.name}.",
             )
 
+        actor.action_economy.spend_action()
         d20_roll = random.randint(1, 20)
         attack_total = d20_roll + weapon.attack_bonus
         if attack_total < target.ac:
@@ -106,7 +121,8 @@ class AttackAction(CombatAction):
                 True,
                 (
                     f"{actor.name} attacks {target.name} with {weapon.name}: "
-                    f"miss ({attack_total} vs AC {target.ac})."
+                    f"miss ({attack_total} vs AC {target.ac}). "
+                    "Action spent: action_available=False."
                 ),
             )
 
@@ -116,7 +132,8 @@ class AttackAction(CombatAction):
             True,
             (
                 f"{actor.name} attacks {target.name} with {weapon.name}: "
-                f"hit ({attack_total} vs AC {target.ac}) for {damage} damage."
+                f"hit ({attack_total} vs AC {target.ac}) for {damage} damage. "
+                "Action spent: action_available=False."
             ),
         )
 
@@ -151,12 +168,21 @@ class EndTurnAction(CombatAction):
         if not self.is_valid(combat_state):
             return ActionResult(False, f"{actor.name} cannot end turn.")
 
-        next_turn_index = (combat_state.turn_index + 1) % len(combat_state.characters)
-        if next_turn_index == 0:
-            combat_state.round_number += 1
-        combat_state.turn_index = next_turn_index
+        next_actor = combat_state.advance_turn()
+        if next_actor is None:
+            return ActionResult(True, f"{actor.name} ends turn. Combat has no living actors.")
 
-        return ActionResult(True, f"{actor.name} ends turn.")
+        return ActionResult(
+            True,
+            (
+                f"{actor.name} ends turn. {next_actor.name} starts turn with "
+                f"action_available={next_actor.action_economy.action_available}, "
+                f"bonus_action_available="
+                f"{next_actor.action_economy.bonus_action_available}, "
+                f"reaction_available={next_actor.action_economy.reaction_available}, "
+                f"movement_remaining={next_actor.action_economy.movement_remaining}."
+            ),
+        )
 
 
 def _get_character(combat_state: CombatState, character_id: int) -> Character | None:

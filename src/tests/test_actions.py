@@ -52,7 +52,10 @@ def test_move_action_moves_actor_to_reachable_unoccupied_cell() -> None:
 
     assert result.success
     assert "moves" in result.description
+    assert "Movement spent: 2" in result.description
     assert hero.position == Position(0, 2)
+    assert hero.action_economy.movement_remaining == 0
+    assert not MoveAction(actor_id=0, destination=Position(0, 1)).is_valid(combat_state)
 
 
 def test_attack_action_hits_with_fixed_damage_in_weapon_range() -> None:
@@ -72,7 +75,10 @@ def test_attack_action_hits_with_fixed_damage_in_weapon_range() -> None:
 
     assert result.success
     assert "hit" in result.description
+    assert "Action spent" in result.description
+    assert not hero.action_economy.action_available
     assert target.hp == 6
+    assert not action.is_valid(combat_state)
 
 
 def test_attack_action_rejects_targets_outside_weapon_range() -> None:
@@ -98,9 +104,27 @@ def test_end_turn_action_advances_turn_and_round() -> None:
     hero = make_character("Hero", Position(0, 0), Team.PLAYERS)
     target = make_character("Target", Position(1, 0), Team.ENEMIES)
     combat_state = CombatState(characters=[hero, target], turn_index=1)
+    hero.action_economy.action_available = False
+    hero.action_economy.bonus_action_available = False
+    hero.action_economy.reaction_available = False
+    hero.action_economy.movement_remaining = 0
 
     result = EndTurnAction(actor_id=1).execute(combat_state)
 
     assert result.success
     assert combat_state.turn_index == 0
     assert combat_state.round_number == 2
+    assert hero.action_economy.action_available
+    assert hero.action_economy.bonus_action_available
+    assert hero.action_economy.reaction_available
+    assert hero.action_economy.movement_remaining == hero.speed
+    assert "starts turn" in result.description
+
+
+def test_character_starts_with_action_economy_resources() -> None:
+    hero = make_character("Hero", Position(0, 0), Team.PLAYERS)
+
+    assert hero.action_economy.action_available
+    assert hero.action_economy.bonus_action_available
+    assert hero.action_economy.reaction_available
+    assert hero.action_economy.movement_remaining == hero.speed

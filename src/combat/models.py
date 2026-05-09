@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING
 
+from combat.action_economy import ActionEconomy, reset_turn_resources
+
 if TYPE_CHECKING:
     from combat.map import GridMap
 
@@ -93,6 +95,10 @@ class Character:
     team: Team
     abilities: list[Ability] = field(default_factory=list)
     conditions: list[Condition] = field(default_factory=list)
+    action_economy: ActionEconomy = field(default_factory=ActionEconomy)
+
+    def __post_init__(self) -> None:
+        reset_turn_resources(self)
 
     @property
     def is_alive(self) -> bool:
@@ -145,3 +151,33 @@ class CombatState:
 
     def characters_for_team(self, team: Team) -> list[Character]:
         return [character for character in self.characters if character.team == team]
+
+    def character_at(self, character_id: int) -> Character | None:
+        if character_id < 0 or character_id >= len(self.characters):
+            return None
+        return self.characters[character_id]
+
+    def reset_turn_resources(self, actor_id: int | None = None) -> Character | None:
+        actor = self.active_character if actor_id is None else self.character_at(actor_id)
+        if actor is None:
+            return None
+        reset_turn_resources(actor)
+        return actor
+
+    def advance_turn(self) -> Character | None:
+        if not self.characters:
+            return None
+
+        current_index = self.turn_index % len(self.characters)
+        wrapped = False
+        for offset in range(1, len(self.characters) + 1):
+            next_index = (current_index + offset) % len(self.characters)
+            if next_index == 0:
+                wrapped = True
+            if self.characters[next_index].is_alive:
+                self.turn_index = next_index
+                if wrapped:
+                    self.round_number += 1
+                return self.reset_turn_resources(next_index)
+
+        return None
