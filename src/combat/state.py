@@ -1,7 +1,5 @@
-"""State placeholders for tactical combat."""
+"""Combat state exports."""
 
+from combat.models import CombatState
 
-class CombatState:
-    """Placeholder for a combat state."""
-
-    pass
+__all__ = ["CombatState"]
