@@ -15,6 +15,7 @@ class ActionResult:
 
     success: bool
     description: str
+    reward: float = 0.0
 
 
 @dataclass

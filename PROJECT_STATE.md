@@ -191,3 +191,181 @@ MoveAction:
 - возвращать CombatEnvironment или CombatState
 
 Пока используй только FighterChampionGreatsword, FighterArcher, Goblin и Orc.
+
+
+9.
+Реализуй преобразование CombatState в тензор для нейросети.
+
+Файл: src/agents/observation.py
+
+Для плана минимум используй фиксированный вектор.
+
+В observation включи:
+- данные текущего актёра
+- HP/max HP
+- AC
+- позицию x,y
+- team
+- melee/ranged флаги
+- до N ближайших союзников
+- до N ближайших врагов
+- расстояния до них
+- жив/мёртв
+- action_available
+- bonus_action_available
+- reaction_available
+- movement_remaining / speed
+
+Сделай padding, если существ меньше N.
+
+Добавь функцию encode_observation(state, actor_id) -> torch.Tensor.
+
+
+10.
+Реализуй иерархическое пространство действий для PPO.
+
+Файл: src/agents/action_space.py
+
+План минимум:
+- action_type:
+  - MOVE
+  - MAIN_ACTION_ATTACK
+  - END_TURN
+
+Зарезервировать на будущее:
+- BONUS_ACTION
+- REACTION
+
+Нужно:
+- target_index:
+  - индекс цели из списка существ
+- move_index:
+  - индекс клетки из списка допустимых клеток
+- build_action_masks(state, actor_id)
+- decode_action(action_type, target_index, move_index, state, actor_id)
+
+Action masks должны учитывать:
+- action_available
+- bonus_action_available
+- reaction_available
+- movement_remaining
+
+invalid actions должны маскироваться.
+
+
+11.
+Реализуй PPO Actor-Critic модель в src/agents/ppo_model.py.
+
+Требования:
+- PyTorch
+- общий MLP encoder
+- policy heads:
+  - action_type_head
+  - target_head
+  - move_head
+- value_head
+- поддержка action masking перед softmax
+- метод act(observation, masks)
+- метод evaluate_actions(observations, actions, masks)
+
+Пока без GNN.
+
+
+12.
+Реализуй PPO trainer в src/training/ppo_trainer.py.
+
+Требования:
+- rollout collection
+- хранить:
+  - observations
+  - actions
+  - log_probs
+  - rewards
+  - dones
+  - values
+  - masks
+- считать returns
+- считать advantages
+- PPO clipped objective
+- value loss
+- entropy bonus
+- gradient clipping
+- сохранение модели в checkpoints/
+
+Добавь конфиг гиперпараметров.
+
+
+13.
+Реализуй reward function для D&D-like боя.
+
+Файл: src/combat/rewards.py
+
+Награды:
+- + за нанесённый урон врагу
+- + за убийство врага
+- + за победу
+- - за смерть союзника
+- - за получение урона
+- - за поражение
+- небольшой штраф за бесполезный ход
+- небольшой штраф за слишком длинный бой
+
+Интегрируй reward в CombatEnvironment.step().
+
+
+14.
+Создай scripts/train_ppo.py.
+
+Требования:
+- создаёт EncounterGenerator
+- создаёт PPO model
+- запускает обучение
+- раз в N эпизодов выводит:
+  - win rate
+  - average reward
+  - average episode length
+  - action distribution
+- сохраняет checkpoints
+- поддерживает аргументы:
+  - --episodes
+  - --seed
+  - --checkpoint
+
+
+15.
+Создай scripts/run_demo.py.
+
+Требования:
+- загружает trained PPO checkpoint
+- создаёт тестовый бой
+- запускает бой пошагово
+- каждый ход печатает:
+  - номер раунда
+  - имя актёра
+  - HP всех существ
+  - выбранное действие
+  - результат действия
+- в конце печатает победителя
+
+Пока только консольный вывод.
+
+
+16.
+Добавь pytest-тесты.
+
+Проверь:
+- движение по карте
+- невозможность выйти за границы карты
+- атака по цели в радиусе
+- запрет атаки по мёртвой цели
+- окончание боя
+- корректность action masks
+- encode_observation возвращает фиксированный размер
+- PPO model возвращает валидные действия
+- AttackAction тратит action_available
+- после атаки нельзя атаковать второй раз без специальной способности
+- движение тратит movement_remaining
+- после начала нового хода action_available снова True
+- bonus_action_available существует и сбрасывается, но пока не используется
+
+Не делай тесты слишком большими.

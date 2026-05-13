@@ -21,6 +21,12 @@ from combat.models import (
     Team,
     WeaponAttack,
 )
+from combat.rewards import (
+    CombatRewardSnapshot,
+    RewardConfig,
+    calculate_combat_reward,
+    snapshot_combat_state,
+)
 
 
 class CombatEnvironment:
@@ -32,11 +38,13 @@ class CombatEnvironment:
         grid_map: GridMap | None = None,
         use_initiative: bool = False,
         log_to_console: bool = True,
+        reward_config: RewardConfig | None = None,
     ) -> None:
         self._initial_characters = list(characters) if characters is not None else None
         self._initial_grid_map = grid_map
         self.use_initiative = use_initiative
         self.log_to_console = log_to_console
+        self.reward_config = reward_config or RewardConfig()
         self.combat_state = CombatState()
         self.action_log: list[str] = []
         self.reset()
@@ -71,29 +79,35 @@ class CombatEnvironment:
 
         active_actor_id = self.combat_state.turn_index % len(self.combat_state.characters)
         active_actor = self.combat_state.characters[active_actor_id]
+        reward_before = snapshot_combat_state(self.combat_state)
         if action.actor_id != active_actor_id:
-            return self._record_result(
+            return self._record_rewarded_result(
                 ActionResult(
                     False,
                     (
                         f"{action.__class__.__name__} rejected: actor {action.actor_id} "
                         f"is not active actor {active_actor_id} ({active_actor.name})."
                     ),
-                )
+                ),
+                reward_before,
+                active_actor.team,
             )
 
         if not action.is_valid(self.combat_state):
-            return self._record_result(
+            return self._record_rewarded_result(
                 ActionResult(
                     False,
                     f"{action.__class__.__name__} is not valid for {active_actor.name}.",
-                )
+                ),
+                reward_before,
+                active_actor.team,
             )
 
-        result = self._record_result(action.execute(self.combat_state))
+        result = action.execute(self.combat_state)
+        self._record_result(result)
         if not isinstance(action, EndTurnAction) and result.success:
             self._auto_end_turn_if_actor_has_no_actions(action.actor_id)
-        return result
+        return self._with_reward(result, reward_before, active_actor.team)
 
     def get_observation(self, actor_id: int) -> dict[str, object]:
         actor = self.combat_state.character_at(actor_id)
@@ -239,6 +253,33 @@ class CombatEnvironment:
         if self.log_to_console:
             print(result.description)
         return result
+
+    def _record_rewarded_result(
+        self,
+        result: ActionResult,
+        before: CombatRewardSnapshot,
+        actor_team: Team,
+    ) -> ActionResult:
+        return self._record_result(self._with_reward(result, before, actor_team))
+
+    def _with_reward(
+        self,
+        result: ActionResult,
+        before: CombatRewardSnapshot,
+        actor_team: Team,
+    ) -> ActionResult:
+        reward = calculate_combat_reward(
+            before,
+            snapshot_combat_state(self.combat_state),
+            actor_team,
+            action_success=result.success,
+            config=self.reward_config,
+        )
+        return ActionResult(
+            success=result.success,
+            description=result.description,
+            reward=reward.total,
+        )
 
     @staticmethod
     def _character_observation(character: Character) -> dict[str, object]:

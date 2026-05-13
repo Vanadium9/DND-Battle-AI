@@ -1,2 +1,14 @@
 combat: {}
-training: {}
+training:
+  ppo:
+    rollout_steps: 128
+    update_epochs: 4
+    minibatch_size: 32
+    learning_rate: 0.0003
+    gamma: 0.99
+    gae_lambda: 0.95
+    clip_epsilon: 0.2
+    value_loss_coef: 0.5
+    entropy_coef: 0.01
+    max_grad_norm: 0.5
+    checkpoint_dir: checkpoints

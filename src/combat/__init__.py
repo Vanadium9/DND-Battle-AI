@@ -30,6 +30,14 @@ from combat.presets import (
     Orc,
     create_test_encounter,
 )
+from combat.rewards import (
+    CombatReward,
+    CombatRewardSnapshot,
+    RewardConfig,
+    calculate_combat_reward,
+    opposing_team,
+    snapshot_combat_state,
+)
 
 __all__ = [
     "Ability",
@@ -39,6 +47,8 @@ __all__ = [
     "Character",
     "CombatAction",
     "CombatEnvironment",
+    "CombatReward",
+    "CombatRewardSnapshot",
     "CombatState",
     "Condition",
     "Enemy",
@@ -51,9 +61,13 @@ __all__ = [
     "MoveAction",
     "Orc",
     "Position",
+    "RewardConfig",
+    "calculate_combat_reward",
     "create_test_encounter",
+    "opposing_team",
     "reset_turn_resources",
     "SpellAbility",
+    "snapshot_combat_state",
     "Stats",
     "Team",
     "WeaponAttack",

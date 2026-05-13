@@ -70,7 +70,9 @@ def test_environment_allows_move_and_attack_in_one_turn() -> None:
     target = environment.combat_state.characters[1]
 
     assert move_result.success
+    assert move_result.reward < 0
     assert attack_result.success
+    assert attack_result.reward > 0
     assert actor.position == Position(0, 1)
     assert actor.action_economy.movement_remaining == 1
     assert not actor.action_economy.action_available
@@ -127,6 +129,7 @@ def test_environment_done_and_winner_when_one_team_dead() -> None:
     result = environment.step(AttackAction(actor_id=0, target_id=1, weapon=sword))
 
     assert result.success
+    assert result.reward > 0
     assert environment.is_done()
     assert environment.get_winner() is Team.PLAYERS
 

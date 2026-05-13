@@ -1,5 +1,5 @@
 """Configuration placeholders."""
 
-from configs.settings import CombatConfig, TrainingConfig
+from configs.settings import CombatConfig, PPOConfig, TrainingConfig
 
-__all__ = ["CombatConfig", "TrainingConfig"]
+__all__ = ["CombatConfig", "PPOConfig", "TrainingConfig"]
