@@ -12,8 +12,8 @@ def test_aggregate_action_distribution_formats_nonzero_counts() -> None:
             length=2,
             winner=Team.PLAYERS,
             action_counts={
-                "MOVE": 1,
-                "MAIN_ACTION_ATTACK": 1,
+                "MOVEMENT": 1,
+                "ATTACK": 1,
                 "END_TURN": 0,
                 "BONUS_ACTION": 0,
                 "REACTION": 0,
@@ -21,7 +21,7 @@ def test_aggregate_action_distribution_formats_nonzero_counts() -> None:
         )
     ]
 
-    assert aggregate_action_distribution(stats) == "{MAIN_ACTION_ATTACK:0.500, MOVE:0.500}"
+    assert aggregate_action_distribution(stats) == "{ATTACK:0.500, MOVEMENT:0.500}"
 
 
 def test_format_report_includes_training_metrics() -> None:
@@ -31,8 +31,8 @@ def test_format_report_includes_training_metrics() -> None:
             length=5,
             winner=Team.PLAYERS,
             action_counts={
-                "MOVE": 2,
-                "MAIN_ACTION_ATTACK": 2,
+                "MOVEMENT": 2,
+                "ATTACK": 2,
                 "END_TURN": 1,
                 "BONUS_ACTION": 0,
                 "REACTION": 0,
@@ -43,8 +43,8 @@ def test_format_report_includes_training_metrics() -> None:
             length=3,
             winner=Team.ENEMIES,
             action_counts={
-                "MOVE": 1,
-                "MAIN_ACTION_ATTACK": 1,
+                "MOVEMENT": 1,
+                "ATTACK": 1,
                 "END_TURN": 1,
                 "BONUS_ACTION": 0,
                 "REACTION": 0,

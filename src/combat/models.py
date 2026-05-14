@@ -7,6 +7,8 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 from combat.action_economy import ActionEconomy, reset_turn_resources
+from combat.abilities import Ability, SpellAbility, WeaponAttack
+from combat.class_features import ClassFeature, Resource, reset_resources
 
 if TYPE_CHECKING:
     from combat.map import GridMap
@@ -49,39 +51,6 @@ class Condition:
 
 
 @dataclass
-class Ability:
-    """A generic combat ability."""
-
-    name: str
-    description: str = ""
-    range: int = 0
-    cooldown: int = 0
-    remaining_cooldown: int = 0
-
-    @property
-    def available(self) -> bool:
-        return self.remaining_cooldown <= 0
-
-
-@dataclass
-class WeaponAttack(Ability):
-    """A simple weapon-based attack."""
-
-    range: int = 1
-    damage: int | str = "1d6"
-    attack_bonus: int = 0
-
-
-@dataclass
-class SpellAbility(Ability):
-    """A simple spell ability."""
-
-    spell_level: int = 0
-    damage: str | None = None
-    save_dc: int | None = None
-
-
-@dataclass
 class Character:
     """A combat participant."""
 
@@ -93,11 +62,41 @@ class Character:
     speed: int
     stats: Stats
     team: Team
+    class_name: str | None = None
+    level: int = 1
+    proficiency_bonus: int = 2
+    weapons: list[WeaponAttack] = field(default_factory=list)
+    common_actions: list[str] = field(
+        default_factory=lambda: [
+            "move",
+            "attack",
+            "cast_spell",
+            "dash",
+            "disengage",
+            "dodge",
+            "help",
+            "hide",
+            "search",
+            "use_object",
+            "ready",
+            "grapple",
+            "shove",
+            "stabilize",
+            "improvised_action",
+            "end_turn",
+        ]
+    )
+    class_features: list[ClassFeature] = field(default_factory=list)
+    resources: dict[str, Resource] = field(default_factory=dict)
     abilities: list[Ability] = field(default_factory=list)
     conditions: list[Condition] = field(default_factory=list)
     action_economy: ActionEconomy = field(default_factory=ActionEconomy)
+    stable: bool = False
 
     def __post_init__(self) -> None:
+        self._migrate_legacy_weapon_abilities()
+        self._sync_legacy_abilities()
+        self._ensure_feature_resources()
         reset_turn_resources(self)
 
     @property
@@ -117,10 +116,161 @@ class Character:
         return self.is_dead
 
     @property
+    def available_weapons(self) -> list[WeaponAttack]:
+        if self.is_dead:
+            return []
+        return [weapon for weapon in self.weapons if weapon.available]
+
+    @property
     def available_abilities(self) -> list[Ability]:
         if self.is_dead:
             return []
-        return [ability for ability in self.abilities if ability.available]
+        available_abilities = [
+            ability for ability in self.abilities if ability.available
+        ]
+        for weapon in self.available_weapons:
+            if weapon not in available_abilities:
+                available_abilities.append(weapon)
+        return available_abilities
+
+    def reset_combat_resources(self) -> None:
+        reset_resources(self.resources)
+
+    def reset_start_of_turn_state(self) -> None:
+        self.action_economy.dodging_until_start_of_next_turn = False
+        self.action_economy.advantage_on_next_check = False
+
+    def reset_end_of_turn_state(self) -> None:
+        self.action_economy.end_turn()
+
+    @property
+    def disengaged_until_end_of_turn(self) -> bool:
+        return self.action_economy.disengaged_until_end_of_turn
+
+    @disengaged_until_end_of_turn.setter
+    def disengaged_until_end_of_turn(self, value: bool) -> None:
+        self.action_economy.disengaged_until_end_of_turn = value
+
+    @property
+    def dodging_until_start_of_next_turn(self) -> bool:
+        return self.action_economy.dodging_until_start_of_next_turn
+
+    @dodging_until_start_of_next_turn.setter
+    def dodging_until_start_of_next_turn(self, value: bool) -> None:
+        self.action_economy.dodging_until_start_of_next_turn = value
+
+    @property
+    def hidden(self) -> bool:
+        return self.action_economy.hidden
+
+    @hidden.setter
+    def hidden(self, value: bool) -> None:
+        self.action_economy.hidden = value
+
+    @property
+    def prone(self) -> bool:
+        return self.action_economy.prone
+
+    @prone.setter
+    def prone(self, value: bool) -> None:
+        self.action_economy.prone = value
+
+    @property
+    def grappled(self) -> bool:
+        return self.action_economy.grappled
+
+    @grappled.setter
+    def grappled(self, value: bool) -> None:
+        self.action_economy.grappled = value
+        if value:
+            self.action_economy.movement_remaining = 0
+
+    @property
+    def grappled_by(self) -> int | None:
+        return self.action_economy.grappled_by
+
+    @grappled_by.setter
+    def grappled_by(self, value: int | None) -> None:
+        self.action_economy.grappled_by = value
+        self.action_economy.grappled = value is not None
+        if value is not None:
+            self.action_economy.movement_remaining = 0
+
+    @property
+    def grappling_target_id(self) -> int | None:
+        return self.action_economy.grappling_target_id
+
+    @grappling_target_id.setter
+    def grappling_target_id(self, value: int | None) -> None:
+        self.action_economy.grappling_target_id = value
+
+    @property
+    def helped_target_id(self) -> int | None:
+        return self.action_economy.helped_target_id
+
+    @helped_target_id.setter
+    def helped_target_id(self, value: int | None) -> None:
+        self.action_economy.helped_target_id = value
+
+    @property
+    def help_against_target_id(self) -> int | None:
+        return self.action_economy.help_against_target_id
+
+    @help_against_target_id.setter
+    def help_against_target_id(self, value: int | None) -> None:
+        self.action_economy.help_against_target_id = value
+
+    @property
+    def help_attack_target_id(self) -> int | None:
+        return self.action_economy.help_against_target_id
+
+    @help_attack_target_id.setter
+    def help_attack_target_id(self, value: int | None) -> None:
+        self.action_economy.help_against_target_id = value
+
+    @property
+    def prepared_action(self) -> str | None:
+        return self.action_economy.prepared_action
+
+    @prepared_action.setter
+    def prepared_action(self, value: str | None) -> None:
+        self.action_economy.prepared_action = value
+
+    @property
+    def trigger_description(self) -> str | None:
+        return self.action_economy.trigger_description
+
+    @trigger_description.setter
+    def trigger_description(self, value: str | None) -> None:
+        self.action_economy.trigger_description = value
+
+    @property
+    def advantage_on_next_check(self) -> bool:
+        return self.action_economy.advantage_on_next_check
+
+    @advantage_on_next_check.setter
+    def advantage_on_next_check(self, value: bool) -> None:
+        self.action_economy.advantage_on_next_check = value
+
+    def _migrate_legacy_weapon_abilities(self) -> None:
+        for ability in self.abilities:
+            if isinstance(ability, WeaponAttack) and ability not in self.weapons:
+                self.weapons.append(ability)
+
+    def _sync_legacy_abilities(self) -> None:
+        for weapon in self.weapons:
+            if weapon not in self.abilities:
+                self.abilities.append(weapon)
+
+    def _ensure_feature_resources(self) -> None:
+        for feature in self.class_features:
+            if feature.resource_name is None:
+                continue
+            if feature.resource_name not in self.resources:
+                self.resources[feature.resource_name] = Resource(
+                    name=feature.resource_name,
+                    max_uses=1,
+                )
 
 
 @dataclass
@@ -161,8 +311,13 @@ class CombatState:
         actor = self.active_character if actor_id is None else self.character_at(actor_id)
         if actor is None:
             return None
+        actor.reset_start_of_turn_state()
         reset_turn_resources(actor)
         return actor
+
+    def reset_combat_resources(self) -> None:
+        for character in self.characters:
+            character.reset_combat_resources()
 
     def advance_turn(self) -> Character | None:
         if not self.characters:

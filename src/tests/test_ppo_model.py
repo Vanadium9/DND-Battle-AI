@@ -2,9 +2,11 @@ import pytest
 import torch
 
 from agents import (
-    ACTION_TYPE_COUNT,
+    ACTION_CATEGORY_COUNT,
+    MAIN_ACTION_TYPE_COUNT,
     OBSERVATION_SIZE,
-    ActionType,
+    ActionCategory,
+    MainActionType,
     PPOActorCritic,
     build_action_masks,
     encode_observation,
@@ -34,39 +36,44 @@ def test_ppo_actor_critic_forward_shapes() -> None:
     model = PPOActorCritic(
         target_count=6,
         move_count=64,
+        option_count=8,
         hidden_sizes=(32,),
     )
     observations = torch.zeros((2, OBSERVATION_SIZE), dtype=torch.float32)
 
     outputs = model(observations)
 
-    assert outputs["action_type_logits"].shape == (2, ACTION_TYPE_COUNT)
+    assert outputs["action_category_logits"].shape == (2, ACTION_CATEGORY_COUNT)
+    assert outputs["main_action_type_logits"].shape == (2, MAIN_ACTION_TYPE_COUNT)
     assert outputs["target_logits"].shape == (2, 6)
     assert outputs["move_logits"].shape == (2, 64)
+    assert outputs["option_logits"].shape == (2, 8)
     assert outputs["value"].shape == (2,)
 
 
-def test_ppo_act_respects_action_type_mask() -> None:
-    model = PPOActorCritic(target_count=6, move_count=64, hidden_sizes=(32,))
+def test_ppo_act_respects_action_category_mask() -> None:
+    model = PPOActorCritic(target_count=6, move_count=64, option_count=8, hidden_sizes=(32,))
     observation = torch.zeros(OBSERVATION_SIZE, dtype=torch.float32)
     masks = {
-        "action_type": torch.tensor(
+        "action_category": torch.tensor(
             [
                 False,
                 False,
+                False,
+                False,
                 True,
-                False,
-                False,
             ],
             dtype=torch.bool,
         ),
+        "main_action_type": torch.zeros(MAIN_ACTION_TYPE_COUNT, dtype=torch.bool),
         "target_index": torch.zeros(3, dtype=torch.bool),
         "move_index": torch.zeros(64, dtype=torch.bool),
+        "option_index": torch.zeros(8, dtype=torch.bool),
     }
 
     action = model.act(observation, masks, deterministic=True)
 
-    assert action["action_type"].item() == int(ActionType.END_TURN)
+    assert action["action_category"].item() == int(ActionCategory.END_TURN)
     assert action["log_prob"].shape == ()
     assert action["entropy"].shape == ()
     assert action["value"].shape == ()
@@ -79,7 +86,7 @@ def test_ppo_evaluate_actions_returns_ppo_terms() -> None:
     state = make_state()
     observation = encode_observation(state, actor_id=0)
     masks = build_action_masks(state, actor_id=0)
-    model = PPOActorCritic(target_count=6, move_count=64, hidden_sizes=(32,))
+    model = PPOActorCritic(target_count=6, move_count=64, option_count=8, hidden_sizes=(32,))
 
     action = model.act(observation, masks)
     evaluation = model.evaluate_actions(observation, action, masks)
@@ -93,43 +100,49 @@ def test_ppo_evaluate_actions_returns_ppo_terms() -> None:
 
 
 def test_ppo_evaluate_actions_rejects_masked_selected_action() -> None:
-    model = PPOActorCritic(target_count=6, move_count=64, hidden_sizes=(32,))
+    model = PPOActorCritic(target_count=6, move_count=64, option_count=8, hidden_sizes=(32,))
     observation = torch.zeros(OBSERVATION_SIZE, dtype=torch.float32)
     masks = {
-        "action_type": torch.tensor(
+        "action_category": torch.tensor(
             [
                 False,
                 False,
+                False,
+                False,
                 True,
-                False,
-                False,
             ],
             dtype=torch.bool,
         ),
+        "main_action_type": torch.zeros(MAIN_ACTION_TYPE_COUNT, dtype=torch.bool),
         "target_index": torch.zeros(3, dtype=torch.bool),
         "move_index": torch.zeros(64, dtype=torch.bool),
+        "option_index": torch.zeros(8, dtype=torch.bool),
     }
 
-    with pytest.raises(ValueError, match="masked action_type"):
+    with pytest.raises(ValueError, match="masked action_category"):
         model.evaluate_actions(
             observation,
             {
-                "action_type": int(ActionType.MOVE),
+                "action_category": int(ActionCategory.MOVEMENT),
+                "main_action_type": int(MainActionType.ATTACK),
                 "move_index": 0,
                 "target_index": 0,
+                "option_index": 0,
             },
             masks,
         )
 
 
-def test_ppo_act_rejects_empty_action_type_mask() -> None:
-    model = PPOActorCritic(target_count=6, move_count=64, hidden_sizes=(32,))
+def test_ppo_act_rejects_empty_action_category_mask() -> None:
+    model = PPOActorCritic(target_count=6, move_count=64, option_count=8, hidden_sizes=(32,))
     observation = torch.zeros(OBSERVATION_SIZE, dtype=torch.float32)
     masks = {
-        "action_type": torch.zeros(ACTION_TYPE_COUNT, dtype=torch.bool),
+        "action_category": torch.zeros(ACTION_CATEGORY_COUNT, dtype=torch.bool),
+        "main_action_type": torch.zeros(MAIN_ACTION_TYPE_COUNT, dtype=torch.bool),
         "target_index": torch.zeros(3, dtype=torch.bool),
         "move_index": torch.zeros(64, dtype=torch.bool),
+        "option_index": torch.zeros(8, dtype=torch.bool),
     }
 
-    with pytest.raises(ValueError, match="action_type mask has no valid actions"):
+    with pytest.raises(ValueError, match="action_category mask has no valid actions"):
         model.act(observation, masks)

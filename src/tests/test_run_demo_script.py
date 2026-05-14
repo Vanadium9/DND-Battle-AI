@@ -25,7 +25,14 @@ def test_load_ppo_checkpoint_infers_model_shape() -> None:
 
     assert loaded_model.target_count == 6
     assert loaded_model.move_count == 64
-    assert loaded_model.action_type_head.weight.shape == model.action_type_head.weight.shape
+    assert (
+        loaded_model.action_category_head.weight.shape
+        == model.action_category_head.weight.shape
+    )
+    assert (
+        loaded_model.main_action_type_head.weight.shape
+        == model.main_action_type_head.weight.shape
+    )
 
 
 def test_format_hp_and_describe_action() -> None:

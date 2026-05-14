@@ -2,7 +2,8 @@ import torch
 
 from agents import (
     OBSERVATION_SIZE,
-    ActionType,
+    ActionCategory,
+    MainActionType,
     PPOActorCritic,
     build_action_masks,
     encode_observation,
@@ -114,19 +115,19 @@ def test_action_masks_reflect_valid_actions_and_resources() -> None:
 
     masks = build_action_masks(state, actor_id=0)
 
-    assert masks["action_type"][ActionType.MOVE]
-    assert masks["action_type"][ActionType.MAIN_ACTION_ATTACK]
-    assert masks["action_type"][ActionType.END_TURN]
-    assert not masks["action_type"][ActionType.BONUS_ACTION]
-    assert not masks["action_type"][ActionType.REACTION]
+    assert masks["action_category"][ActionCategory.MOVEMENT]
+    assert masks["main_action_type"][MainActionType.ATTACK]
+    assert masks["action_category"][ActionCategory.END_TURN]
+    assert not masks["action_category"][ActionCategory.BONUS_ACTION]
+    assert not masks["action_category"][ActionCategory.REACTION]
     assert masks["target_index"][1]
 
     state.characters[0].action_economy.action_available = False
     state.characters[0].action_economy.movement_remaining = 0
     masks = build_action_masks(state, actor_id=0)
 
-    assert not masks["action_type"][ActionType.MAIN_ACTION_ATTACK]
-    assert not masks["action_type"][ActionType.MOVE]
+    assert not masks["main_action_type"][MainActionType.ATTACK]
+    assert not masks["action_category"][ActionCategory.MOVEMENT]
 
 
 def test_encode_observation_has_fixed_size() -> None:
@@ -151,12 +152,18 @@ def test_ppo_model_returns_unmasked_action() -> None:
     masks = build_action_masks(state, actor_id=0)
 
     action = model.act(observation, masks, deterministic=True)
-    action_type = int(action["action_type"].item())
+    action_category = int(action["action_category"].item())
+    main_action_type = int(action["main_action_type"].item())
 
-    assert masks["action_type"][action_type]
-    if action_type == int(ActionType.MAIN_ACTION_ATTACK):
+    assert masks["action_category"][action_category]
+    if (
+        action_category == int(ActionCategory.MAIN_ACTION)
+        and main_action_type == int(MainActionType.ATTACK)
+    ):
+        assert masks["main_action_type"][main_action_type]
         assert masks["target_index"][int(action["target_index"].item())]
-    if action_type == int(ActionType.MOVE):
+        assert masks["option_index"][int(action["option_index"].item())]
+    if action_category == int(ActionCategory.MOVEMENT):
         assert masks["move_index"][int(action["move_index"].item())]
 
 
@@ -175,4 +182,4 @@ def test_new_turn_resets_action_and_bonus_but_bonus_is_unused() -> None:
     assert hero.action_economy.action_available is True
     assert hero.action_economy.bonus_action_available is True
     assert hero.action_economy.movement_remaining == hero.speed
-    assert not masks["action_type"][ActionType.BONUS_ACTION]
+    assert not masks["action_category"][ActionCategory.BONUS_ACTION]

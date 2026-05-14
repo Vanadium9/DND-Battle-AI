@@ -11,7 +11,8 @@ from torch.nn import functional as F
 
 from agents import (
     PPOActorCritic,
-    ActionType,
+    ActionCategory,
+    MainActionType,
     build_action_masks,
     decode_action,
     encode_observation,
@@ -27,9 +28,11 @@ class RolloutBuffer:
     observations: list[torch.Tensor] = field(default_factory=list)
     actions: dict[str, list[torch.Tensor]] = field(
         default_factory=lambda: {
-            "action_type": [],
+            "action_category": [],
+            "main_action_type": [],
             "target_index": [],
             "move_index": [],
+            "option_index": [],
         }
     )
     log_probs: list[torch.Tensor] = field(default_factory=list)
@@ -38,9 +41,11 @@ class RolloutBuffer:
     values: list[torch.Tensor] = field(default_factory=list)
     masks: dict[str, list[torch.Tensor]] = field(
         default_factory=lambda: {
-            "action_type": [],
+            "action_category": [],
+            "main_action_type": [],
             "target_index": [],
             "move_index": [],
+            "option_index": [],
         }
     )
     last_value: float = 0.0
@@ -137,7 +142,7 @@ class PPOTrainer:
             self.environment.reset()
 
         rollout = RolloutBuffer()
-        action_counts = {action_type.name: 0 for action_type in ActionType}
+        action_counts = _empty_action_counts()
         self.model.eval()
 
         for _ in range(steps):
@@ -152,12 +157,13 @@ class PPOTrainer:
             with torch.no_grad():
                 action_output = self.model.act(observation, masks)
 
-            action_type = ActionType(int(action_output["action_type"].item()))
-            action_counts[action_type.name] += 1
+            action_counts[_action_count_name(action_output)] += 1
             action = decode_action(
-                action_type,
+                int(action_output["action_category"].item()),
+                int(action_output["main_action_type"].item()),
                 int(action_output["target_index"].item()),
                 int(action_output["move_index"].item()),
+                int(action_output["option_index"].item()),
                 state,
                 actor_id,
             )
@@ -204,9 +210,11 @@ class PPOTrainer:
                 action_output = self.model.act(observation, masks)
 
             action = decode_action(
-                int(action_output["action_type"].item()),
+                int(action_output["action_category"].item()),
+                int(action_output["main_action_type"].item()),
                 int(action_output["target_index"].item()),
                 int(action_output["move_index"].item()),
+                int(action_output["option_index"].item()),
                 state,
                 actor_id,
             )
@@ -379,10 +387,16 @@ class PPOTrainer:
 
     def _padded_masks(self, masks: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         return {
-            "action_type": _pad_mask(
-                masks["action_type"],
-                self.model.action_type_count,
-                "action_type",
+            "action_category": _pad_mask(
+                masks["action_category"],
+                self.model.action_category_count,
+                "action_category",
+                self.device,
+            ),
+            "main_action_type": _pad_mask(
+                masks["main_action_type"],
+                self.model.main_action_type_count,
+                "main_action_type",
                 self.device,
             ),
             "target_index": _pad_mask(
@@ -395,6 +409,12 @@ class PPOTrainer:
                 masks["move_index"],
                 self.model.move_count,
                 "move_index",
+                self.device,
+            ),
+            "option_index": _pad_mask(
+                masks["option_index"],
+                self.model.option_count,
+                "option_index",
                 self.device,
             ),
         }
@@ -426,3 +446,16 @@ def _normalize_advantages(advantages: torch.Tensor) -> torch.Tensor:
     if advantages.numel() <= 1:
         return advantages
     return (advantages - advantages.mean()) / (advantages.std(unbiased=False) + 1.0e-8)
+
+
+def _empty_action_counts() -> dict[str, int]:
+    names = [category.name for category in ActionCategory if category is not ActionCategory.MAIN_ACTION]
+    names.extend(main_action.name for main_action in MainActionType)
+    return {name: 0 for name in names}
+
+
+def _action_count_name(action_output: dict[str, torch.Tensor]) -> str:
+    category = ActionCategory(int(action_output["action_category"].item()))
+    if category is ActionCategory.MAIN_ACTION:
+        return MainActionType(int(action_output["main_action_type"].item())).name
+    return category.name

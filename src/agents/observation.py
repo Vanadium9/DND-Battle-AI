@@ -127,13 +127,13 @@ def _team_flag(team: Team, expected: Team) -> float:
 
 def _has_melee_attack(character: Character) -> bool:
     return any(
-        isinstance(ability, WeaponAttack) and ability.range <= 1
-        for ability in character.abilities
+        isinstance(weapon, WeaponAttack) and weapon.range <= 1
+        for weapon in character.weapons
     )
 
 
 def _has_ranged_attack(character: Character) -> bool:
     return any(
-        isinstance(ability, WeaponAttack) and ability.range > 1
-        for ability in character.abilities
+        isinstance(weapon, WeaponAttack) and weapon.range > 1
+        for weapon in character.weapons
     )

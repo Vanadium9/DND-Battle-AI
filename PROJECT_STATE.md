@@ -369,3 +369,176 @@ invalid actions должны маскироваться.
 - bonus_action_available существует и сбрасывается, но пока не используется
 
 Не делай тесты слишком большими.
+
+
+17.
+Переработай систему классов и действий.
+
+Цель:
+разделить общие боевые действия, доступные всем существам, и классовые способности.
+
+Новая структура:
+- src/combat/common_actions.py
+- src/combat/class_features.py
+- src/combat/abilities.py
+
+Требования:
+- WeaponAttack не должен быть классовой способностью
+- любое существо может иметь список оружейных атак
+- эффективность атаки зависит от stats, proficiency_bonus, weapon, attack_bonus
+- классы дают features/resources, но не владеют базовой логикой AttackAction
+- Character должен иметь:
+  - class_name optional
+  - level
+  - proficiency_bonus
+  - weapons
+  - common_actions
+  - class_features
+  - resources
+
+Обнови FighterChampionGreatsword, FighterArcher, Goblin и Orc под новую структуру.
+
+Сохрани совместимость с текущим CombatEnvironment.
+
+
+18.
+Реализуй общие боевые действия D&D 5e.
+
+Файл: src/combat/common_actions.py
+
+Добавь действия:
+- Attack
+- CastSpell
+- Dash
+- Disengage
+- Dodge
+- Help
+- Hide
+- Search
+- UseObject
+- Ready
+- Grapple
+- Shove
+- Stabilize
+- ImprovisedAction
+- EndTurn
+
+Упрощённая реализация:
+- Attack: оружейная атака по цели
+- CastSpell: вызывает SpellAbility, если она есть у существа
+- Dash: добавляет movement_remaining += speed и тратит action
+- Disengage: ставит флаг disengaged_until_end_of_turn и тратит action
+- Dodge: ставит флаг dodging_until_start_of_next_turn и тратит action
+- Help: даёт союзнику advantage на следующую атаку по выбранной цели или advantage на проверку
+- Hide: делает Stealth check и ставит hidden=True при успехе
+- Search: делает Perception или Investigation check
+- UseObject: тратит action и вызывает эффект предмета, если предмет реализован
+- Ready: сохраняет prepared_action и trigger_description
+- Grapple: special melee attack, contested Athletics vs Athletics/Acrobatics
+- Shove: special melee attack, contested Athletics vs Athletics/Acrobatics, результат: prone или push на 1 клетку
+- Stabilize: Medicine check DC 10 на существе с 0 HP
+- ImprovisedAction: placeholder, тратит action и логирует описание
+- EndTurn: завершает ход
+
+Пока не реализуй сложные предметы и сложные prepared triggers.
+Главная цель — корректная структура, action economy и action masks.
+
+
+19.
+Расширь action economy до полноценной модели D&D-like боя.
+
+Файл: src/combat/action_economy.py
+
+У каждого существа на ход должны быть:
+- action_available
+- bonus_action_available
+- reaction_available
+- movement_remaining
+- free_object_interaction_available
+
+Добавь состояния хода:
+- dodging_until_start_of_next_turn
+- disengaged_until_end_of_turn
+- hidden
+- prone
+- grappled
+- grappling_target_id
+- helped_target_id
+- help_against_target_id
+- prepared_action
+- reaction_used_this_round
+
+Правила:
+- основные действия тратят action_available
+- бонусные действия тратят bonus_action_available
+- реакции тратят reaction_available
+- движение тратит movement_remaining
+- Dash увеличивает movement_remaining на speed
+- Dodge действует до начала следующего хода существа
+- Disengage действует до конца текущего хода
+- Ready тратит action_available и резервирует reaction_available для срабатывания
+- Grapple/Shove считаются частью Attack action
+- если существо prone, вставание тратит половину speed
+- если grappled, movement_remaining = 0, пока захват не снят
+
+Обнови начало и конец хода в CombatEnvironment.
+
+
+20.
+Обнови иерархическое пространство действий под общие боевые действия.
+
+Файл: src/agents/action_space.py
+
+Новая иерархия:
+1. action_category:
+   - MAIN_ACTION
+   - BONUS_ACTION
+   - MOVEMENT
+   - REACTION
+   - END_TURN
+
+2. main_action_type:
+   - ATTACK
+   - CAST_SPELL
+   - DASH
+   - DISENGAGE
+   - DODGE
+   - HELP
+   - HIDE
+   - SEARCH
+   - USE_OBJECT
+   - READY
+   - GRAPPLE
+   - SHOVE
+   - STABILIZE
+   - IMPROVISED
+
+3. target_index:
+   - цель действия, если нужна
+
+4. move_index:
+   - клетка движения, если нужна
+
+5. option_index:
+   - вариант действия:
+     - weapon index
+     - spell index
+     - shove mode: prone/push
+     - ability check type
+     - object index
+
+Action masks должны учитывать:
+- action_available
+- bonus_action_available
+- reaction_available
+- movement_remaining
+- наличие оружия
+- наличие заклинаний
+- дистанцию до цели
+- line of sight, если реализовано
+- жив/мёртв
+- prone/grappled/hidden/dodging/disengaged
+- spell slots, если spell system уже есть
+
+Важно:
+если spell system ещё не реализована, CastSpell должен быть замаскирован.

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import torch
 
-from agents import ACTION_TYPE_COUNT, PPOActorCritic
+from agents import ACTION_CATEGORY_COUNT, MAIN_ACTION_TYPE_COUNT, PPOActorCritic
 from combat import CombatEnvironment, FighterArcher, Goblin, GridMap, Position
 from configs import PPOConfig
 from training import PPOTrainer, RolloutBuffer
@@ -42,11 +42,25 @@ def test_collect_rollout_stores_ppo_fields() -> None:
     assert len(rollout.rewards) == 4
     assert len(rollout.dones) == 4
     assert len(rollout.values) == 4
-    assert set(rollout.actions) == {"action_type", "target_index", "move_index"}
-    assert set(rollout.masks) == {"action_type", "target_index", "move_index"}
-    assert rollout.masks["action_type"][0].shape == (ACTION_TYPE_COUNT,)
+    assert set(rollout.actions) == {
+        "action_category",
+        "main_action_type",
+        "target_index",
+        "move_index",
+        "option_index",
+    }
+    assert set(rollout.masks) == {
+        "action_category",
+        "main_action_type",
+        "target_index",
+        "move_index",
+        "option_index",
+    }
+    assert rollout.masks["action_category"][0].shape == (ACTION_CATEGORY_COUNT,)
+    assert rollout.masks["main_action_type"][0].shape == (MAIN_ACTION_TYPE_COUNT,)
     assert rollout.masks["target_index"][0].shape == (trainer.model.target_count,)
     assert rollout.masks["move_index"][0].shape == (trainer.model.move_count,)
+    assert rollout.masks["option_index"][0].shape == (trainer.model.option_count,)
 
 
 def test_collect_episode_returns_rollout_and_episode_stats() -> None:
@@ -57,13 +71,7 @@ def test_collect_episode_returns_rollout_and_episode_stats() -> None:
     assert len(rollout) == stats.length
     assert 0 < stats.length <= 4
     assert stats.total_reward == sum(rollout.rewards)
-    assert set(stats.action_counts) == {
-        "MOVE",
-        "MAIN_ACTION_ATTACK",
-        "END_TURN",
-        "BONUS_ACTION",
-        "REACTION",
-    }
+    assert {"ATTACK", "MOVEMENT", "END_TURN"}.issubset(stats.action_counts)
     assert sum(stats.action_counts.values()) == stats.length
 
 

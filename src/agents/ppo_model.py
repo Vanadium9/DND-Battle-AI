@@ -8,12 +8,19 @@ import torch
 from torch import nn
 from torch.distributions import Categorical
 
-from agents.action_space import ACTION_TYPE_COUNT, ActionType
+from agents.action_space import (
+    ACTION_CATEGORY_COUNT,
+    MAIN_ACTION_TYPE_COUNT,
+    MIN_OPTION_COUNT,
+    ActionCategory,
+    MainActionType,
+)
 from agents.observation import OBSERVATION_SIZE
 
 
 DEFAULT_TARGET_COUNT = 8
 DEFAULT_MOVE_COUNT = 64
+DEFAULT_OPTION_COUNT = MIN_OPTION_COUNT
 MASKED_LOGIT_VALUE = -1.0e9
 
 
@@ -25,7 +32,9 @@ class PPOActorCritic(nn.Module):
         observation_size: int = OBSERVATION_SIZE,
         target_count: int = DEFAULT_TARGET_COUNT,
         move_count: int = DEFAULT_MOVE_COUNT,
-        action_type_count: int = ACTION_TYPE_COUNT,
+        option_count: int = DEFAULT_OPTION_COUNT,
+        action_category_count: int = ACTION_CATEGORY_COUNT,
+        main_action_type_count: int = MAIN_ACTION_TYPE_COUNT,
         hidden_sizes: Sequence[int] = (128, 128),
     ) -> None:
         super().__init__()
@@ -35,20 +44,28 @@ class PPOActorCritic(nn.Module):
             raise ValueError("target_count must be greater than zero")
         if move_count <= 0:
             raise ValueError("move_count must be greater than zero")
-        if action_type_count <= 0:
-            raise ValueError("action_type_count must be greater than zero")
+        if option_count <= 0:
+            raise ValueError("option_count must be greater than zero")
+        if action_category_count <= 0:
+            raise ValueError("action_category_count must be greater than zero")
+        if main_action_type_count <= 0:
+            raise ValueError("main_action_type_count must be greater than zero")
 
         self.observation_size = observation_size
         self.target_count = target_count
         self.move_count = move_count
-        self.action_type_count = action_type_count
+        self.option_count = option_count
+        self.action_category_count = action_category_count
+        self.main_action_type_count = main_action_type_count
 
         self.encoder = _build_mlp(observation_size, hidden_sizes)
         encoder_size = hidden_sizes[-1] if hidden_sizes else observation_size
 
-        self.action_type_head = nn.Linear(encoder_size, action_type_count)
+        self.action_category_head = nn.Linear(encoder_size, action_category_count)
+        self.main_action_type_head = nn.Linear(encoder_size, main_action_type_count)
         self.target_head = nn.Linear(encoder_size, target_count)
         self.move_head = nn.Linear(encoder_size, move_count)
+        self.option_head = nn.Linear(encoder_size, option_count)
         self.value_head = nn.Linear(encoder_size, 1)
 
     def forward(self, observations: torch.Tensor) -> dict[str, torch.Tensor]:
@@ -60,9 +77,11 @@ class PPOActorCritic(nn.Module):
         )
         encoded = self.encoder(batched_observations)
         return {
-            "action_type_logits": self.action_type_head(encoded),
+            "action_category_logits": self.action_category_head(encoded),
+            "main_action_type_logits": self.main_action_type_head(encoded),
             "target_logits": self.target_head(encoded),
             "move_logits": self.move_head(encoded),
+            "option_logits": self.option_head(encoded),
             "value": self.value_head(encoded).squeeze(-1),
         }
 
@@ -82,8 +101,12 @@ class PPOActorCritic(nn.Module):
         batch_size = batched_observation.shape[0]
         distributions = self._build_distributions(outputs, masks, batch_size)
 
-        action_type = _select_from_distribution(
-            distributions["action_type"],
+        action_category = _select_from_distribution(
+            distributions["action_category"],
+            deterministic,
+        )
+        main_action_type = _select_from_distribution(
+            distributions["main_action_type"],
             deterministic,
         )
         target_index = _select_from_distribution(
@@ -94,18 +117,26 @@ class PPOActorCritic(nn.Module):
             distributions["move_index"],
             deterministic,
         )
+        option_index = _select_from_distribution(
+            distributions["option_index"],
+            deterministic,
+        )
 
         log_prob, entropy = self._combine_action_log_probs(
             distributions,
-            action_type,
+            action_category,
+            main_action_type,
             target_index,
             move_index,
+            option_index,
         )
 
         result = {
-            "action_type": action_type,
+            "action_category": action_category,
+            "main_action_type": main_action_type,
             "target_index": target_index,
             "move_index": move_index,
+            "option_index": option_index,
             "log_prob": log_prob,
             "entropy": entropy,
             "value": outputs["value"],
@@ -130,7 +161,19 @@ class PPOActorCritic(nn.Module):
         batch_size = batched_observations.shape[0]
         distributions = self._build_distributions(outputs, masks, batch_size)
 
-        action_type = _action_tensor(actions, "action_type", batch_size, outputs["value"].device)
+        action_category = _action_tensor(
+            actions,
+            "action_category",
+            batch_size,
+            outputs["value"].device,
+        )
+        main_action_type = _action_tensor(
+            actions,
+            "main_action_type",
+            batch_size,
+            outputs["value"].device,
+            default=0,
+        )
         target_index = _action_tensor(
             actions,
             "target_index",
@@ -145,18 +188,29 @@ class PPOActorCritic(nn.Module):
             outputs["value"].device,
             default=0,
         )
+        option_index = _action_tensor(
+            actions,
+            "option_index",
+            batch_size,
+            outputs["value"].device,
+            default=0,
+        )
         self._validate_selected_actions(
             distributions["masks"],
-            action_type,
+            action_category,
+            main_action_type,
             target_index,
             move_index,
+            option_index,
         )
 
         log_prob, entropy = self._combine_action_log_probs(
             distributions,
-            action_type,
+            action_category,
+            main_action_type,
             target_index,
             move_index,
+            option_index,
         )
         return {
             "log_prob": log_prob,
@@ -170,13 +224,21 @@ class PPOActorCritic(nn.Module):
         masks: Mapping[str, torch.Tensor],
         batch_size: int,
     ) -> dict[str, Categorical | dict[str, torch.Tensor]]:
-        action_type_mask = _prepare_mask(
-            masks.get("action_type"),
+        action_category_mask = _prepare_mask(
+            masks.get("action_category"),
             batch_size,
-            self.action_type_count,
+            self.action_category_count,
             outputs["value"].device,
-            "action_type",
+            "action_category",
             allow_empty=False,
+        )
+        main_action_type_mask = _prepare_mask(
+            masks.get("main_action_type"),
+            batch_size,
+            self.main_action_type_count,
+            outputs["value"].device,
+            "main_action_type",
+            allow_empty=True,
         )
         target_mask = _prepare_mask(
             masks.get("target_index"),
@@ -194,10 +256,24 @@ class PPOActorCritic(nn.Module):
             "move_index",
             allow_empty=True,
         )
+        option_mask = _prepare_mask(
+            masks.get("option_index"),
+            batch_size,
+            self.option_count,
+            outputs["value"].device,
+            "option_index",
+            allow_empty=True,
+        )
 
         return {
-            "action_type": Categorical(
-                logits=_mask_logits(outputs["action_type_logits"], action_type_mask)
+            "action_category": Categorical(
+                logits=_mask_logits(outputs["action_category_logits"], action_category_mask)
+            ),
+            "main_action_type": Categorical(
+                logits=_mask_logits(
+                    outputs["main_action_type_logits"],
+                    main_action_type_mask,
+                )
             ),
             "target_index": Categorical(
                 logits=_mask_logits(outputs["target_logits"], target_mask)
@@ -205,80 +281,116 @@ class PPOActorCritic(nn.Module):
             "move_index": Categorical(
                 logits=_mask_logits(outputs["move_logits"], move_mask)
             ),
+            "option_index": Categorical(
+                logits=_mask_logits(outputs["option_logits"], option_mask)
+            ),
             "masks": {
-                "action_type": action_type_mask,
+                "action_category": action_category_mask,
+                "main_action_type": main_action_type_mask,
                 "target_index": target_mask,
                 "move_index": move_mask,
+                "option_index": option_mask,
             },
         }
 
     def _combine_action_log_probs(
         self,
         distributions: Mapping[str, Categorical | dict[str, torch.Tensor]],
-        action_type: torch.Tensor,
+        action_category: torch.Tensor,
+        main_action_type: torch.Tensor,
         target_index: torch.Tensor,
         move_index: torch.Tensor,
+        option_index: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        action_type_distribution = distributions["action_type"]
+        action_category_distribution = distributions["action_category"]
+        main_action_type_distribution = distributions["main_action_type"]
         target_distribution = distributions["target_index"]
         move_distribution = distributions["move_index"]
-        if not isinstance(action_type_distribution, Categorical):
-            raise TypeError("action_type distribution is missing")
+        option_distribution = distributions["option_index"]
+        if not isinstance(action_category_distribution, Categorical):
+            raise TypeError("action_category distribution is missing")
+        if not isinstance(main_action_type_distribution, Categorical):
+            raise TypeError("main_action_type distribution is missing")
         if not isinstance(target_distribution, Categorical):
             raise TypeError("target_index distribution is missing")
         if not isinstance(move_distribution, Categorical):
             raise TypeError("move_index distribution is missing")
+        if not isinstance(option_distribution, Categorical):
+            raise TypeError("option_index distribution is missing")
 
-        action_type_log_prob = action_type_distribution.log_prob(action_type)
+        category_log_prob = action_category_distribution.log_prob(action_category)
+        main_action_log_prob = main_action_type_distribution.log_prob(main_action_type)
         target_log_prob = target_distribution.log_prob(target_index)
         move_log_prob = move_distribution.log_prob(move_index)
+        option_log_prob = option_distribution.log_prob(option_index)
 
-        action_type_entropy = action_type_distribution.entropy()
+        category_entropy = action_category_distribution.entropy()
+        main_action_entropy = main_action_type_distribution.entropy()
         target_entropy = target_distribution.entropy()
         move_entropy = move_distribution.entropy()
+        option_entropy = option_distribution.entropy()
 
-        attack_selected = action_type == int(ActionType.MAIN_ACTION_ATTACK)
-        move_selected = action_type == int(ActionType.MOVE)
+        main_action_selected = action_category == int(ActionCategory.MAIN_ACTION)
+        target_selected = _uses_target_index(action_category, main_action_type)
+        move_selected = action_category == int(ActionCategory.MOVEMENT)
+        option_selected = _uses_option_index(action_category, main_action_type)
 
-        zero = torch.zeros_like(action_type_log_prob)
+        zero = torch.zeros_like(category_log_prob)
         log_prob = (
-            action_type_log_prob
-            + torch.where(attack_selected, target_log_prob, zero)
+            category_log_prob
+            + torch.where(main_action_selected, main_action_log_prob, zero)
+            + torch.where(target_selected, target_log_prob, zero)
             + torch.where(move_selected, move_log_prob, zero)
+            + torch.where(option_selected, option_log_prob, zero)
         )
         entropy = (
-            action_type_entropy
-            + torch.where(attack_selected, target_entropy, zero)
+            category_entropy
+            + torch.where(main_action_selected, main_action_entropy, zero)
+            + torch.where(target_selected, target_entropy, zero)
             + torch.where(move_selected, move_entropy, zero)
+            + torch.where(option_selected, option_entropy, zero)
         )
         return log_prob, entropy
 
     @staticmethod
     def _validate_selected_actions(
         masks: Mapping[str, torch.Tensor],
-        action_type: torch.Tensor,
+        action_category: torch.Tensor,
+        main_action_type: torch.Tensor,
         target_index: torch.Tensor,
         move_index: torch.Tensor,
+        option_index: torch.Tensor,
     ) -> None:
-        if (action_type >= masks["action_type"].shape[1]).any():
-            raise ValueError("actions contain an out-of-range action_type")
+        if (action_category >= masks["action_category"].shape[1]).any():
+            raise ValueError("actions contain an out-of-range action_category")
 
-        batch_indices = torch.arange(action_type.shape[0], device=action_type.device)
-        if not masks["action_type"][batch_indices, action_type].all():
-            raise ValueError("actions contain a masked action_type")
+        batch_indices = torch.arange(action_category.shape[0], device=action_category.device)
+        if not masks["action_category"][batch_indices, action_category].all():
+            raise ValueError("actions contain a masked action_category")
 
-        attack_selected = action_type == int(ActionType.MAIN_ACTION_ATTACK)
-        if attack_selected.any() and (
-            target_index[attack_selected] >= masks["target_index"].shape[1]
+        main_action_selected = action_category == int(ActionCategory.MAIN_ACTION)
+        if main_action_selected.any() and (
+            main_action_type[main_action_selected] >= masks["main_action_type"].shape[1]
+        ).any():
+            raise ValueError("actions contain an out-of-range main_action_type")
+        if main_action_selected.any() and not masks["main_action_type"][
+            batch_indices[main_action_selected],
+            main_action_type[main_action_selected],
+        ].all():
+            raise ValueError("actions contain a masked main_action_type")
+
+        target_selected = _uses_target_index(action_category, main_action_type)
+        if target_selected.any() and (
+            target_index[target_selected] >= masks["target_index"].shape[1]
         ).any():
             raise ValueError("actions contain an out-of-range target_index")
-        if attack_selected.any() and not masks["target_index"][
-            batch_indices[attack_selected],
-            target_index[attack_selected],
+        if target_selected.any() and not masks["target_index"][
+            batch_indices[target_selected],
+            target_index[target_selected],
         ].all():
             raise ValueError("actions contain a masked target_index")
 
-        move_selected = action_type == int(ActionType.MOVE)
+        move_selected = action_category == int(ActionCategory.MOVEMENT)
         if move_selected.any() and (
             move_index[move_selected] >= masks["move_index"].shape[1]
         ).any():
@@ -288,6 +400,17 @@ class PPOActorCritic(nn.Module):
             move_index[move_selected],
         ].all():
             raise ValueError("actions contain a masked move_index")
+
+        option_selected = _uses_option_index(action_category, main_action_type)
+        if option_selected.any() and (
+            option_index[option_selected] >= masks["option_index"].shape[1]
+        ).any():
+            raise ValueError("actions contain an out-of-range option_index")
+        if option_selected.any() and not masks["option_index"][
+            batch_indices[option_selected],
+            option_index[option_selected],
+        ].all():
+            raise ValueError("actions contain a masked option_index")
 
 
 def _build_mlp(input_size: int, hidden_sizes: Sequence[int]) -> nn.Sequential:
@@ -300,6 +423,37 @@ def _build_mlp(input_size: int, hidden_sizes: Sequence[int]) -> nn.Sequential:
         layers.append(nn.Tanh())
         current_size = hidden_size
     return nn.Sequential(*layers)
+
+
+def _uses_target_index(
+    action_category: torch.Tensor,
+    main_action_type: torch.Tensor,
+) -> torch.Tensor:
+    main_action_selected = action_category == int(ActionCategory.MAIN_ACTION)
+    target_main_action = (
+        (main_action_type == int(MainActionType.ATTACK))
+        | (main_action_type == int(MainActionType.CAST_SPELL))
+        | (main_action_type == int(MainActionType.HELP))
+        | (main_action_type == int(MainActionType.GRAPPLE))
+        | (main_action_type == int(MainActionType.SHOVE))
+        | (main_action_type == int(MainActionType.STABILIZE))
+    )
+    return main_action_selected & target_main_action
+
+
+def _uses_option_index(
+    action_category: torch.Tensor,
+    main_action_type: torch.Tensor,
+) -> torch.Tensor:
+    main_action_selected = action_category == int(ActionCategory.MAIN_ACTION)
+    option_main_action = (
+        (main_action_type == int(MainActionType.ATTACK))
+        | (main_action_type == int(MainActionType.CAST_SPELL))
+        | (main_action_type == int(MainActionType.SEARCH))
+        | (main_action_type == int(MainActionType.USE_OBJECT))
+        | (main_action_type == int(MainActionType.SHOVE))
+    )
+    return main_action_selected & option_main_action
 
 
 def _ensure_batched_observations(

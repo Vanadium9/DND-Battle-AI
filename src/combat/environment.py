@@ -6,11 +6,26 @@ import copy
 from typing import Sequence
 
 from combat.actions import (
+    COMMON_ACTION_ATTACK,
+    COMMON_ACTION_MOVE,
     ActionResult,
     AttackAction,
+    CastSpellAction,
     CombatAction,
+    DashAction,
+    DisengageAction,
+    DodgeAction,
     EndTurnAction,
+    GrappleAction,
+    HelpAction,
+    HideAction,
+    ImprovisedAction,
     MoveAction,
+    ReadyAction,
+    SearchAction,
+    ShoveAction,
+    StabilizeAction,
+    UseObjectAction,
 )
 from combat.map import GridMap
 from combat.models import (
@@ -59,10 +74,11 @@ class CombatEnvironment:
 
         grid_map = copy.deepcopy(self._initial_grid_map) or GridMap(width=5, height=5)
         self.combat_state = CombatState(characters=characters, grid_map=grid_map)
+        self.combat_state.reset_combat_resources()
         self.action_log = []
         self._skip_dead_active_actor()
         if not self.is_done():
-            self.combat_state.reset_turn_resources()
+            self._begin_active_turn()
         return self.combat_state
 
     def step(self, action: CombatAction) -> ActionResult:
@@ -103,10 +119,15 @@ class CombatEnvironment:
                 active_actor.team,
             )
 
-        result = action.execute(self.combat_state)
+        if isinstance(action, EndTurnAction):
+            result = self._end_active_turn(action.actor_id)
+        else:
+            result = action.execute(self.combat_state)
         self._record_result(result)
         if not isinstance(action, EndTurnAction) and result.success:
             self._auto_end_turn_if_actor_has_no_actions(action.actor_id)
+        if result.success and self.is_done():
+            self.combat_state.reset_combat_resources()
         return self._with_reward(result, reward_before, active_actor.team)
 
     def get_observation(self, actor_id: int) -> dict[str, object]:
@@ -143,7 +164,10 @@ class CombatEnvironment:
         actions: list[CombatAction] = []
         actions.extend(self._available_move_actions(actor_id, actor))
         actions.extend(self._available_attack_actions(actor_id, actor))
-        actions.append(EndTurnAction(actor_id=actor_id))
+        actions.extend(self._available_other_common_actions(actor_id, actor))
+        end_turn = EndTurnAction(actor_id=actor_id)
+        if end_turn.is_valid(self.combat_state):
+            actions.append(end_turn)
         return actions
 
     def is_done(self) -> bool:
@@ -169,12 +193,22 @@ class CombatEnvironment:
         actor_id: int,
         actor: Character,
     ) -> list[MoveAction]:
-        if self.combat_state.grid_map is None:
+        if (
+            self.combat_state.grid_map is None
+            or COMMON_ACTION_MOVE not in actor.common_actions
+            or actor.action_economy.grappled
+        ):
+            return []
+
+        movement_remaining = actor.action_economy.movement_remaining
+        if actor.prone:
+            movement_remaining -= max(1, max(0, actor.speed) // 2)
+        if movement_remaining <= 0:
             return []
 
         movement_cells = self.combat_state.grid_map.movement_cells(
             actor.position,
-            actor.action_economy.movement_remaining,
+            movement_remaining,
             self.combat_state.characters,
         )
         return [
@@ -188,16 +222,14 @@ class CombatEnvironment:
         actor_id: int,
         actor: Character,
     ) -> list[AttackAction]:
-        if not actor.action_economy.action_available:
+        if (
+            not actor.action_economy.action_available
+            or COMMON_ACTION_ATTACK not in actor.common_actions
+        ):
             return []
 
         actions: list[AttackAction] = []
-        weapons = [
-            ability
-            for ability in actor.available_abilities
-            if isinstance(ability, WeaponAttack)
-        ]
-        for weapon in weapons:
+        for weapon in actor.available_weapons:
             for target_id, target in enumerate(self.combat_state.characters):
                 if target.team == actor.team or target.is_dead:
                     continue
@@ -210,6 +242,36 @@ class CombatEnvironment:
                     actions.append(action)
         return actions
 
+    def _available_other_common_actions(
+        self,
+        actor_id: int,
+        actor: Character,
+    ) -> list[CombatAction]:
+        if not actor.action_economy.action_available:
+            return []
+
+        candidates: list[CombatAction] = [
+            CastSpellAction(actor_id=actor_id),
+            DashAction(actor_id=actor_id),
+            DisengageAction(actor_id=actor_id),
+            DodgeAction(actor_id=actor_id),
+            HideAction(actor_id=actor_id),
+            SearchAction(actor_id=actor_id),
+            UseObjectAction(actor_id=actor_id),
+            ReadyAction(actor_id=actor_id),
+            ImprovisedAction(actor_id=actor_id),
+        ]
+        for target_id, target in enumerate(self.combat_state.characters):
+            if target_id == actor_id:
+                continue
+            candidates.append(HelpAction(actor_id=actor_id, target_id=target_id))
+            candidates.append(StabilizeAction(actor_id=actor_id, target_id=target_id))
+            if target.team != actor.team:
+                candidates.append(GrappleAction(actor_id=actor_id, target_id=target_id))
+                candidates.append(ShoveAction(actor_id=actor_id, target_id=target_id))
+
+        return [action for action in candidates if action.is_valid(self.combat_state)]
+
     def _auto_end_turn_if_actor_has_no_actions(self, actor_id: int) -> None:
         if self.is_done() or not self._is_active_actor(actor_id):
             return
@@ -220,9 +282,9 @@ class CombatEnvironment:
             if not isinstance(action, EndTurnAction)
         ]
         if not non_end_turn_actions:
-            end_turn = EndTurnAction(actor_id=actor_id)
-            if end_turn.is_valid(self.combat_state):
-                self._record_result(end_turn.execute(self.combat_state))
+            result = self._end_active_turn(actor_id)
+            if result.success:
+                self._record_result(result)
 
     def _skip_dead_active_actor(self) -> None:
         while (
@@ -247,6 +309,18 @@ class CombatEnvironment:
             bool(self.combat_state.characters)
             and actor_id == self.combat_state.turn_index % len(self.combat_state.characters)
         )
+
+    def _begin_active_turn(self) -> Character | None:
+        if not self.combat_state.characters:
+            return None
+        actor_id = self.combat_state.turn_index % len(self.combat_state.characters)
+        return self.combat_state.reset_turn_resources(actor_id)
+
+    def _end_active_turn(self, actor_id: int) -> ActionResult:
+        end_turn = EndTurnAction(actor_id=actor_id)
+        if not end_turn.is_valid(self.combat_state):
+            return ActionResult(False, f"Actor {actor_id} cannot end turn.")
+        return end_turn.execute(self.combat_state)
 
     def _record_result(self, result: ActionResult) -> ActionResult:
         self.action_log.append(result.description)
@@ -294,11 +368,37 @@ class CombatEnvironment:
             },
             "speed": character.speed,
             "team": character.team.value,
+            "class_name": character.class_name,
+            "level": character.level,
+            "proficiency_bonus": character.proficiency_bonus,
             "alive": character.is_alive,
             "action_available": character.action_economy.action_available,
             "bonus_action_available": character.action_economy.bonus_action_available,
             "reaction_available": character.action_economy.reaction_available,
             "movement_remaining": character.action_economy.movement_remaining,
+            "free_object_interaction_available": (
+                character.action_economy.free_object_interaction_available
+            ),
+            "disengaged_until_end_of_turn": character.disengaged_until_end_of_turn,
+            "dodging_until_start_of_next_turn": character.dodging_until_start_of_next_turn,
+            "hidden": character.hidden,
+            "prone": character.prone,
+            "grappled": character.grappled,
+            "grappling_target_id": character.grappling_target_id,
+            "helped_target_id": character.helped_target_id,
+            "help_against_target_id": character.help_against_target_id,
+            "prepared_action": character.prepared_action,
+            "trigger_description": character.trigger_description,
+            "grappled_by": character.grappled_by,
+            "reaction_used_this_round": character.action_economy.reaction_used_this_round,
+            "stable": character.stable,
+            "weapons": [weapon.name for weapon in character.weapons],
+            "common_actions": list(character.common_actions),
+            "class_features": [feature.name for feature in character.class_features],
+            "resources": {
+                name: resource.uses_remaining
+                for name, resource in character.resources.items()
+            },
         }
 
     @staticmethod
@@ -325,7 +425,7 @@ class CombatEnvironment:
                 speed=3,
                 stats=Stats(dex=14),
                 team=Team.PLAYERS,
-                abilities=[hero_weapon],
+                weapons=[hero_weapon],
             ),
             Character(
                 name="Enemy",
@@ -336,6 +436,6 @@ class CombatEnvironment:
                 speed=3,
                 stats=Stats(dex=12),
                 team=Team.ENEMIES,
-                abilities=[enemy_weapon],
+                weapons=[enemy_weapon],
             ),
         ]
