@@ -6,7 +6,13 @@ from dataclasses import dataclass
 import random
 import re
 
-from combat.abilities import SpellAbility, WeaponAttack, ability_modifier
+from combat.abilities import SpellAbility, WeaponAttack
+from combat.checks import (
+    ContestedCheckResult,
+    passive_perception,
+    roll_ability_check,
+    roll_contested_check,
+)
 from combat.models import Character, CombatState, Position
 
 
@@ -25,6 +31,7 @@ COMMON_ACTION_GRAPPLE = "grapple"
 COMMON_ACTION_SHOVE = "shove"
 COMMON_ACTION_STABILIZE = "stabilize"
 COMMON_ACTION_IMPROVISED = "improvised_action"
+COMMON_ACTION_OPPORTUNITY_ATTACK = "opportunity_attack"
 COMMON_ACTION_END_TURN = "end_turn"
 
 
@@ -179,6 +186,92 @@ class AttackAction(CombatAction):
             return None
         for weapon in actor.available_weapons:
             return weapon
+        return None
+
+
+@dataclass
+class OpportunityAttackAction(CombatAction):
+    """Make a melee weapon attack as a reaction against a creature leaving reach."""
+
+    target_id: int
+    weapon: WeaponAttack | None = None
+
+    def is_valid(self, combat_state: CombatState) -> bool:
+        actor = _get_character(combat_state, self.actor_id)
+        target = _get_character(combat_state, self.target_id)
+        weapon = self._resolve_weapon(actor)
+        if actor is None or target is None or weapon is None:
+            return False
+        if (
+            actor.is_dead
+            or target.is_dead
+            or target.team == actor.team
+            or target.disengaged_until_end_of_turn
+            or COMMON_ACTION_OPPORTUNITY_ATTACK not in actor.common_actions
+            or not actor.action_economy.reaction_available
+            or not weapon.available
+        ):
+            return False
+        return _distance(actor.position, target.position, combat_state) <= 1
+
+    def execute(self, combat_state: CombatState) -> ActionResult:
+        actor = _get_character(combat_state, self.actor_id)
+        target = _get_character(combat_state, self.target_id)
+        weapon = self._resolve_weapon(actor)
+        if actor is None:
+            return ActionResult(
+                False,
+                f"Opportunity attack failed: actor {self.actor_id} not found.",
+            )
+        if target is None:
+            return ActionResult(
+                False,
+                f"{actor.name} cannot opportunity attack missing target {self.target_id}.",
+            )
+        if weapon is None:
+            return ActionResult(False, f"{actor.name} has no melee weapon for opportunity attack.")
+        if not self.is_valid(combat_state):
+            return ActionResult(False, f"{actor.name} cannot opportunity attack {target.name}.")
+
+        actor.action_economy.spend_reaction()
+        d20_roll = _attack_roll(actor, target, combat_state)
+        attack_modifier = weapon.attack_modifier(actor)
+        attack_total = d20_roll + attack_modifier
+        if attack_total < target.ac:
+            return ActionResult(
+                True,
+                (
+                    f"{actor.name} opportunity attacks {target.name} with {weapon.name}: "
+                    f"miss ({attack_total} vs AC {target.ac}; "
+                    f"d20={d20_roll}, modifier={attack_modifier}). "
+                    "Reaction spent: reaction_available=False."
+                ),
+            )
+
+        damage = max(0, _roll_damage(weapon.damage) + weapon.damage_modifier(actor))
+        target.hp = max(0, target.hp - damage)
+        if target.hp > 0:
+            target.stable = False
+        return ActionResult(
+            True,
+            (
+                f"{actor.name} opportunity attacks {target.name} with {weapon.name}: "
+                f"hit ({attack_total} vs AC {target.ac}; "
+                f"d20={d20_roll}, modifier={attack_modifier}) for {damage} damage. "
+                "Reaction spent: reaction_available=False."
+            ),
+        )
+
+    def _resolve_weapon(self, actor: Character | None) -> WeaponAttack | None:
+        if actor is None:
+            return None
+        if self.weapon is not None:
+            if self.weapon in actor.weapons and self.weapon.range <= 1:
+                return self.weapon
+            return None
+        for weapon in actor.available_weapons:
+            if weapon.range <= 1:
+                return weapon
         return None
 
 
@@ -372,7 +465,8 @@ class HelpAction(CombatAction):
 class HideAction(CombatAction):
     """Spend an action to attempt a Stealth check."""
 
-    dc: int = 10
+    dc: int | None = 10
+    observer_id: int | None = None
 
     def is_valid(self, combat_state: CombatState) -> bool:
         return _can_spend_action(combat_state, self.actor_id, COMMON_ACTION_HIDE)
@@ -384,16 +478,45 @@ class HideAction(CombatAction):
         if not self.is_valid(combat_state):
             return ActionResult(False, f"{actor.name} cannot Hide.")
         actor.action_economy.spend_action()
-        check = _ability_check(actor, "dex", proficient=True)
-        actor.action_economy.hidden = check >= self.dc
+        check = roll_ability_check(actor, "stealth", proficiency=True)
+        dc, dc_description = self._resolve_dc(combat_state, actor)
+        actor.action_economy.hidden = check.total >= dc
         outcome = "succeeds" if actor.action_economy.hidden else "fails"
         return ActionResult(
             True,
             (
                 f"{actor.name} attempts to Hide and {outcome} "
-                f"({check} vs DC {self.dc}). Action spent: action_available=False."
+                f"({check.total} vs {dc_description}; {check.log}). "
+                "Action spent: action_available=False."
             ),
         )
+
+    def _resolve_dc(
+        self,
+        combat_state: CombatState,
+        actor: Character,
+    ) -> tuple[int, str]:
+        if self.dc is not None:
+            return self.dc, f"DC {self.dc}"
+
+        observer = (
+            _get_character(combat_state, self.observer_id)
+            if self.observer_id is not None
+            else None
+        )
+        if observer is not None:
+            dc = passive_perception(observer)
+            return dc, f"{observer.name} passive Perception {dc}"
+
+        observer_dcs = [
+            (passive_perception(candidate), candidate.name)
+            for candidate in combat_state.characters
+            if candidate is not actor and candidate.team != actor.team and candidate.is_alive
+        ]
+        if not observer_dcs:
+            return 10, "DC 10"
+        dc, observer_name = max(observer_dcs, key=lambda item: item[0])
+        return dc, f"{observer_name} passive Perception {dc}"
 
 
 @dataclass
@@ -413,14 +536,15 @@ class SearchAction(CombatAction):
         if not self.is_valid(combat_state):
             return ActionResult(False, f"{actor.name} cannot Search.")
         actor.action_economy.spend_action()
-        ability = "int" if self.skill.lower() == "investigation" else "wis"
-        check = _ability_check(actor, ability, proficient=True)
-        outcome = "succeeds" if check >= self.dc else "fails"
+        skill = "investigation" if self.skill.lower() == "investigation" else "perception"
+        check = roll_ability_check(actor, skill, proficiency=True)
+        outcome = "succeeds" if check.total >= self.dc else "fails"
         return ActionResult(
             True,
             (
                 f"{actor.name} Searches with {self.skill} and {outcome} "
-                f"({check} vs DC {self.dc}). Action spent: action_available=False."
+                f"({check.total} vs DC {self.dc}; {check.log}). "
+                "Action spent: action_available=False."
             ),
         )
 
@@ -510,8 +634,8 @@ class GrappleAction(CombatAction):
         if not self.is_valid(combat_state):
             return ActionResult(False, f"{actor.name} cannot Grapple {target.name}.")
         actor.action_economy.spend_action()
-        attacker_check, defender_check = _contested_athletics(actor, target)
-        if attacker_check >= defender_check:
+        contest = _roll_athletics_contest(actor, target)
+        if contest.actor_wins:
             target.action_economy.apply_grappled()
             target.grappled_by = self.actor_id
             actor.grappling_target_id = self.target_id
@@ -522,7 +646,8 @@ class GrappleAction(CombatAction):
             True,
             (
                 f"{actor.name} attempts to Grapple {target.name} and {outcome} "
-                f"({attacker_check} vs {defender_check}). "
+                f"({contest.actor_result.total} vs {contest.target_result.total}; "
+                f"{contest.log}). "
                 "Action spent: action_available=False."
             ),
         )
@@ -554,8 +679,8 @@ class ShoveAction(CombatAction):
         if not self.is_valid(combat_state):
             return ActionResult(False, f"{actor.name} cannot Shove {target.name}.")
         actor.action_economy.spend_action()
-        attacker_check, defender_check = _contested_athletics(actor, target)
-        if attacker_check >= defender_check:
+        contest = _roll_athletics_contest(actor, target)
+        if contest.actor_wins:
             result_detail = _apply_shove_success(combat_state, actor, target, self.shove_effect)
             outcome = f"succeeds; {result_detail}"
         else:
@@ -564,7 +689,8 @@ class ShoveAction(CombatAction):
             True,
             (
                 f"{actor.name} attempts to Shove {target.name} and {outcome} "
-                f"({attacker_check} vs {defender_check}). "
+                f"({contest.actor_result.total} vs {contest.target_result.total}; "
+                f"{contest.log}). "
                 "Action spent: action_available=False."
             ),
         )
@@ -594,14 +720,15 @@ class StabilizeAction(CombatAction):
         if not self.is_valid(combat_state):
             return ActionResult(False, f"{actor.name} cannot Stabilize {target.name}.")
         actor.action_economy.spend_action()
-        check = _ability_check(actor, "wis", proficient=True)
-        target.stable = check >= self.dc
+        check = roll_ability_check(actor, "medicine", proficiency=True)
+        target.stable = check.total >= self.dc
         outcome = "stabilizes" if target.stable else "fails to stabilize"
         return ActionResult(
             True,
             (
                 f"{actor.name} {outcome} {target.name} "
-                f"({check} vs DC {self.dc}). Action spent: action_available=False."
+                f"({check.total} vs DC {self.dc}; {check.log}). "
+                "Action spent: action_available=False."
             ),
         )
 
@@ -759,22 +886,6 @@ def _roll_damage(damage: int | str) -> int:
     return max(0, total)
 
 
-def _ability_check(
-    character: Character,
-    ability_score: str,
-    proficient: bool = False,
-) -> int:
-    first_roll = random.randint(1, 20)
-    if character.advantage_on_next_check:
-        second_roll = random.randint(1, 20)
-        roll = max(first_roll, second_roll)
-        character.advantage_on_next_check = False
-    else:
-        roll = first_roll
-    proficiency = character.proficiency_bonus if proficient else 0
-    return roll + ability_modifier(character.stats, ability_score) + proficiency
-
-
 def _attack_roll(
     actor: Character,
     target: Character,
@@ -807,11 +918,16 @@ def _consume_help_advantage(
     return False
 
 
-def _contested_athletics(actor: Character, target: Character) -> tuple[int, int]:
-    attacker_check = _ability_check(actor, "str", proficient=True)
-    defender_athletics = _ability_check(target, "str", proficient=True)
-    defender_acrobatics = _ability_check(target, "dex", proficient=True)
-    return attacker_check, max(defender_athletics, defender_acrobatics)
+def _roll_athletics_contest(
+    actor: Character,
+    target: Character,
+) -> ContestedCheckResult:
+    return roll_contested_check(
+        actor,
+        target,
+        "athletics",
+        ("athletics", "acrobatics"),
+    )
 
 
 def _apply_shove_success(

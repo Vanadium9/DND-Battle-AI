@@ -107,6 +107,7 @@ class CombatEnvironment:
                 ),
                 reward_before,
                 active_actor.team,
+                action,
             )
 
         if not action.is_valid(self.combat_state):
@@ -117,6 +118,7 @@ class CombatEnvironment:
                 ),
                 reward_before,
                 active_actor.team,
+                action,
             )
 
         if isinstance(action, EndTurnAction):
@@ -128,7 +130,7 @@ class CombatEnvironment:
             self._auto_end_turn_if_actor_has_no_actions(action.actor_id)
         if result.success and self.is_done():
             self.combat_state.reset_combat_resources()
-        return self._with_reward(result, reward_before, active_actor.team)
+        return self._with_reward(result, reward_before, active_actor.team, action)
 
     def get_observation(self, actor_id: int) -> dict[str, object]:
         actor = self.combat_state.character_at(actor_id)
@@ -333,14 +335,16 @@ class CombatEnvironment:
         result: ActionResult,
         before: CombatRewardSnapshot,
         actor_team: Team,
+        action: CombatAction | None = None,
     ) -> ActionResult:
-        return self._record_result(self._with_reward(result, before, actor_team))
+        return self._record_result(self._with_reward(result, before, actor_team, action))
 
     def _with_reward(
         self,
         result: ActionResult,
         before: CombatRewardSnapshot,
         actor_team: Team,
+        action: CombatAction | None = None,
     ) -> ActionResult:
         reward = calculate_combat_reward(
             before,
@@ -348,6 +352,8 @@ class CombatEnvironment:
             actor_team,
             action_success=result.success,
             config=self.reward_config,
+            action=action,
+            action_result=result,
         )
         return ActionResult(
             success=result.success,

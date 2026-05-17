@@ -63,11 +63,14 @@ def test_dash_disengage_dodge_hide_search_and_ready_spend_action(monkeypatch) ->
     result = HideAction(actor_id=0).execute(state)
     assert result.success
     assert hero.hidden is True
+    assert "Stealth:" in result.description
+    assert "d20=10" in result.description
 
     hero.action_economy.action_available = True
     result = SearchAction(actor_id=0).execute(state)
     assert result.success
     assert "Searches" in result.description
+    assert "Perception:" in result.description
 
     hero.action_economy.action_available = True
     result = ReadyAction(
@@ -126,6 +129,8 @@ def test_grapple_shove_and_stabilize_use_action_economy(monkeypatch) -> None:
     assert result.success
     assert enemy.grappled_by == 0
     assert hero.action_economy.action_available is False
+    assert "Athletics:" in result.description
+    assert "best of" in result.description
 
     hero.action_economy.action_available = True
     rolls = iter([20, 1, 1])
@@ -134,6 +139,7 @@ def test_grapple_shove_and_stabilize_use_action_economy(monkeypatch) -> None:
     assert result.success
     assert enemy.prone is True
     assert hero.action_economy.action_available is False
+    assert "Athletics:" in result.description
 
     hero.action_economy.action_available = True
     monkeypatch.setattr("combat.common_actions.random.randint", lambda _low, _high: 8)
@@ -141,6 +147,20 @@ def test_grapple_shove_and_stabilize_use_action_economy(monkeypatch) -> None:
     assert result.success
     assert ally.stable is True
     assert hero.action_economy.action_available is False
+    assert "Medicine:" in result.description
+
+
+def test_hide_can_use_passive_perception_dc(monkeypatch) -> None:
+    hero = make_character("Hero", Position(0, 0), Team.PLAYERS, stats=Stats(dex=10))
+    enemy = make_character("Observer", Position(1, 0), Team.ENEMIES, stats=Stats(wis=18))
+    state = CombatState(characters=[hero, enemy], grid_map=GridMap(width=4, height=4))
+    monkeypatch.setattr("combat.common_actions.random.randint", lambda _low, _high: 10)
+
+    result = HideAction(actor_id=0, dc=None, observer_id=1).execute(state)
+
+    assert result.success
+    assert hero.hidden is False
+    assert "Observer passive Perception 16" in result.description
 
 
 def test_action_masks_include_common_action_resources() -> None:

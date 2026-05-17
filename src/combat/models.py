@@ -83,6 +83,7 @@ class Character:
             "shove",
             "stabilize",
             "improvised_action",
+            "opportunity_attack",
             "end_turn",
         ]
     )

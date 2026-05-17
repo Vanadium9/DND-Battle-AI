@@ -542,3 +542,107 @@ Action masks должны учитывать:
 
 Важно:
 если spell system ещё не реализована, CastSpell должен быть замаскирован.
+
+
+21.
+Расширь observation encoder под общие боевые действия.
+
+Файл: src/agents/observation.py
+
+Добавь признаки текущего актёра:
+- action_available
+- bonus_action_available
+- reaction_available
+- movement_remaining / speed
+- free_object_interaction_available
+- prone
+- grappled
+- hidden
+- dodging
+- disengaged
+- has_prepared_action
+- number_of_weapons
+- has_spells
+- can_cast_spell
+- can_attack
+- can_dash
+- can_disengage
+- can_dodge
+- can_hide
+- can_help
+- can_grapple
+- can_shove
+
+Для других существ добавь:
+- prone
+- grappled
+- hidden
+- dodging
+- distance_to_actor
+- in_melee_reach
+- can_be_attacked
+- can_be_helped_against
+- can_be_grappled
+- can_be_shoved
+
+Обнови input size PPO модели.
+
+
+22.
+Добавь систему проверок характеристик.
+
+Файл: src/combat/checks.py
+
+Нужно:
+- ability_modifier(score)
+- roll_d20()
+- roll_ability_check(character, ability, proficiency=False, advantage_state="normal")
+- roll_contested_check(actor, target, actor_check, target_check_options)
+
+Использовать для:
+- Grapple: Athletics vs Athletics или Acrobatics
+- Shove: Athletics vs Athletics или Acrobatics
+- Hide: Stealth vs passive Perception или заданный DC
+- Search: Perception/Investigation check
+- Stabilize: Medicine DC 10
+
+Добавь логирование бросков.
+
+
+23.
+Добавь pytest-тесты для общих боевых действий.
+
+Проверь:
+- Dash увеличивает movement_remaining и тратит action
+- Disengage предотвращает opportunity attack
+- Dodge даёт disadvantage атакующим до начала следующего хода
+- Help даёт advantage союзнику на следующую атаку
+- Hide может установить hidden=True
+- Search выполняет проверку и возвращает результат
+- Grapple ставит grappled при успешной contested check
+- Shove может поставить prone
+- Shove может оттолкнуть цель на 1 клетку
+- Stabilize работает на существе с 0 HP
+- Ready сохраняет prepared_action
+- OpportunityAttack тратит reaction
+- нельзя выполнить два основных действия без Action Surge
+- нельзя выполнить реакцию дважды за раунд
+
+
+24.
+Обнови reward function с учётом новых общих действий.
+
+Файл: src/combat/rewards.py
+
+Добавь награды/штрафы:
+- небольшой плюс за успешный Grapple, если цель опасна или рядом с уязвимым союзником
+- плюс за успешный Shove prone, если союзники могут атаковать цель
+- плюс за Dodge, если после этого атаки по персонажу промахнулись
+- плюс за Disengage, если персонаж избежал opportunity attack или вышел из опасной позиции
+- плюс за Help, если союзник после этого попал атакой
+- штраф за бесполезный Dash без тактического улучшения
+- штраф за Hide, если оно не даёт преимущества
+- штраф за Ready, если prepared action не сработал
+- штраф за UseObject/ImprovisedAction без эффекта
+
+Не делай reward слишком большим: эти награды должны быть меньше, чем победа, убийство врага и предотвращение смерти союзника.

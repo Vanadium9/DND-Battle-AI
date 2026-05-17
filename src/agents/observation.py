@@ -6,12 +6,30 @@ from typing import Iterable
 
 import torch
 
-from combat.models import Character, CombatState, Position, Team, WeaponAttack
+from combat.abilities import SpellAbility, WeaponAttack
+from combat.common_actions import (
+    COMMON_ACTION_ATTACK,
+    COMMON_ACTION_CAST_SPELL,
+    COMMON_ACTION_DASH,
+    COMMON_ACTION_DISENGAGE,
+    COMMON_ACTION_DODGE,
+    COMMON_ACTION_GRAPPLE,
+    COMMON_ACTION_HELP,
+    COMMON_ACTION_HIDE,
+    COMMON_ACTION_SHOVE,
+)
+from combat.models import Character, CombatState, Position, Team
 
 
 MAX_NEARBY_CHARACTERS = 4
-CHARACTER_FEATURE_SIZE = 20
-OBSERVATION_SIZE = CHARACTER_FEATURE_SIZE * (1 + MAX_NEARBY_CHARACTERS * 2)
+BASE_CHARACTER_FEATURE_SIZE = 20
+ACTOR_FEATURE_SIZE = BASE_CHARACTER_FEATURE_SIZE + 18
+OTHER_CHARACTER_FEATURE_SIZE = BASE_CHARACTER_FEATURE_SIZE + 9
+CHARACTER_FEATURE_SIZE = OTHER_CHARACTER_FEATURE_SIZE
+OBSERVATION_SIZE = (
+    ACTOR_FEATURE_SIZE
+    + OTHER_CHARACTER_FEATURE_SIZE * MAX_NEARBY_CHARACTERS * 2
+)
 
 
 def encode_observation(state: CombatState, actor_id: int) -> torch.Tensor:
@@ -21,48 +39,96 @@ def encode_observation(state: CombatState, actor_id: int) -> torch.Tensor:
     if actor is None:
         raise ValueError(f"Actor {actor_id} not found")
 
-    allies = _nearest_characters(
+    allies = _nearest_character_entries(
         state,
         actor,
         (
-            character
+            (index, character)
             for index, character in enumerate(state.characters)
             if index != actor_id and character.team == actor.team
         ),
     )
-    enemies = _nearest_characters(
+    enemies = _nearest_character_entries(
         state,
         actor,
         (
-            character
-            for character in state.characters
+            (index, character)
+            for index, character in enumerate(state.characters)
             if character.team != actor.team
         ),
     )
 
     features = [
-        *_encode_character(actor, actor, state, present=True),
+        *_encode_actor(actor, actor_id, state),
         *_encode_padded_group(allies, actor, state),
         *_encode_padded_group(enemies, actor, state),
     ]
     return torch.tensor(features, dtype=torch.float32)
 
 
+def _encode_actor(
+    actor: Character,
+    actor_id: int,
+    state: CombatState,
+) -> list[float]:
+    return [
+        *_encode_base_character(actor, actor, state, present=True),
+        float(actor.action_economy.free_object_interaction_available),
+        float(actor.prone),
+        float(actor.grappled),
+        float(actor.hidden),
+        float(actor.dodging_until_start_of_next_turn),
+        float(actor.disengaged_until_end_of_turn),
+        float(actor.prepared_action is not None),
+        float(len(actor.weapons)),
+        float(_has_spells(actor)),
+        float(_can_cast_spell(state, actor)),
+        float(_can_attack(state, actor)),
+        float(_can_dash(actor)),
+        float(_can_disengage(actor)),
+        float(_can_dodge(actor)),
+        float(_can_hide(actor)),
+        float(_can_help(state, actor_id, actor)),
+        float(_can_grapple(state, actor_id, actor)),
+        float(_can_shove(state, actor_id, actor)),
+    ]
+
+
 def _encode_padded_group(
-    characters: list[Character],
+    entries: list[tuple[int, Character]],
     actor: Character,
     state: CombatState,
 ) -> list[float]:
     features: list[float] = []
     for index in range(MAX_NEARBY_CHARACTERS):
-        if index < len(characters):
-            features.extend(_encode_character(characters[index], actor, state, present=True))
+        if index < len(entries):
+            _, character = entries[index]
+            features.extend(_encode_other_character(character, actor, state))
         else:
-            features.extend([0.0] * CHARACTER_FEATURE_SIZE)
+            features.extend([0.0] * OTHER_CHARACTER_FEATURE_SIZE)
     return features
 
 
-def _encode_character(
+def _encode_other_character(
+    character: Character,
+    actor: Character,
+    state: CombatState,
+) -> list[float]:
+    return [
+        *_encode_base_character(character, actor, state, present=True),
+        float(character.prone),
+        float(character.grappled),
+        float(character.hidden),
+        float(character.dodging_until_start_of_next_turn),
+        float(_is_in_melee_reach(actor, character, state)),
+        float(_can_attack_target(state, actor, character)),
+        float(_can_help_against_target(state, actor, character)),
+        float(_can_grapple_target(state, actor, character)),
+        float(_can_shove_target(state, actor, character)),
+    ]
+
+
+def _encode_base_character(
     character: Character,
     reference: Character,
     state: CombatState,
@@ -99,18 +165,18 @@ def _encode_character(
     ]
 
 
-def _nearest_characters(
+def _nearest_character_entries(
     state: CombatState,
     actor: Character,
-    characters: Iterable[Character],
-) -> list[Character]:
+    entries: Iterable[tuple[int, Character]],
+) -> list[tuple[int, Character]]:
     return sorted(
-        characters,
-        key=lambda character: (
-            _distance(actor.position, character.position, state),
-            character.position.x,
-            character.position.y,
-            character.name,
+        entries,
+        key=lambda item: (
+            _distance(actor.position, item[1].position, state),
+            item[1].position.x,
+            item[1].position.y,
+            item[1].name,
         ),
     )[:MAX_NEARBY_CHARACTERS]
 
@@ -137,3 +203,246 @@ def _has_ranged_attack(character: Character) -> bool:
         isinstance(weapon, WeaponAttack) and weapon.range > 1
         for weapon in character.weapons
     )
+
+
+def _has_spells(character: Character) -> bool:
+    return any(isinstance(ability, SpellAbility) for ability in character.abilities)
+
+
+def _can_spend_action(actor: Character, action_name: str) -> bool:
+    return (
+        actor.is_alive
+        and actor.action_economy.action_available
+        and action_name in actor.common_actions
+    )
+
+
+def _can_cast_spell(state: CombatState, actor: Character) -> bool:
+    if not _can_spend_action(actor, COMMON_ACTION_CAST_SPELL):
+        return False
+    if not _spell_system_available(actor):
+        return False
+    return any(
+        _spell_has_valid_target_or_no_target(state, actor, spell)
+        for spell in _available_spells(actor)
+    )
+
+
+def _can_attack(state: CombatState, actor: Character) -> bool:
+    return any(
+        _can_attack_target(state, actor, target)
+        for target in state.characters
+        if target is not actor
+    )
+
+
+def _can_dash(actor: Character) -> bool:
+    return _can_spend_action(actor, COMMON_ACTION_DASH)
+
+
+def _can_disengage(actor: Character) -> bool:
+    return (
+        _can_spend_action(actor, COMMON_ACTION_DISENGAGE)
+        and not actor.disengaged_until_end_of_turn
+    )
+
+
+def _can_dodge(actor: Character) -> bool:
+    return (
+        _can_spend_action(actor, COMMON_ACTION_DODGE)
+        and not actor.dodging_until_start_of_next_turn
+    )
+
+
+def _can_hide(actor: Character) -> bool:
+    return _can_spend_action(actor, COMMON_ACTION_HIDE) and not actor.hidden
+
+
+def _can_help(state: CombatState, actor_id: int, actor: Character) -> bool:
+    if not _can_spend_action(actor, COMMON_ACTION_HELP):
+        return False
+    return any(
+        target_id != actor_id and not target.is_dead
+        for target_id, target in enumerate(state.characters)
+    )
+
+
+def _can_grapple(state: CombatState, actor_id: int, actor: Character) -> bool:
+    return any(
+        target_id != actor_id and _can_grapple_target(state, actor, target)
+        for target_id, target in enumerate(state.characters)
+    )
+
+
+def _can_shove(state: CombatState, actor_id: int, actor: Character) -> bool:
+    return any(
+        target_id != actor_id and _can_shove_target(state, actor, target)
+        for target_id, target in enumerate(state.characters)
+    )
+
+
+def _can_attack_target(
+    state: CombatState,
+    actor: Character,
+    target: Character,
+) -> bool:
+    if not _can_spend_action(actor, COMMON_ACTION_ATTACK):
+        return False
+    return any(
+        _is_valid_weapon_target(state, actor, target, weapon)
+        for weapon in actor.available_weapons
+    )
+
+
+def _is_valid_weapon_target(
+    state: CombatState,
+    actor: Character,
+    target: Character,
+    weapon: WeaponAttack,
+) -> bool:
+    return (
+        target is not actor
+        and target.team != actor.team
+        and target.is_alive
+        and weapon.available
+        and _distance(actor.position, target.position, state) <= weapon.range
+        and _has_line_of_sight(state, actor.position, target.position)
+    )
+
+
+def _can_help_against_target(
+    state: CombatState,
+    actor: Character,
+    target: Character,
+) -> bool:
+    return (
+        _can_spend_action(actor, COMMON_ACTION_HELP)
+        and target is not actor
+        and target.team != actor.team
+        and target.is_alive
+    )
+
+
+def _can_grapple_target(
+    state: CombatState,
+    actor: Character,
+    target: Character,
+) -> bool:
+    return _can_special_melee_target(
+        state,
+        actor,
+        target,
+        COMMON_ACTION_GRAPPLE,
+    )
+
+
+def _can_shove_target(
+    state: CombatState,
+    actor: Character,
+    target: Character,
+) -> bool:
+    return _can_special_melee_target(
+        state,
+        actor,
+        target,
+        COMMON_ACTION_SHOVE,
+    )
+
+
+def _can_special_melee_target(
+    state: CombatState,
+    actor: Character,
+    target: Character,
+    action_name: str,
+) -> bool:
+    return (
+        _can_spend_action(actor, action_name)
+        and COMMON_ACTION_ATTACK in actor.common_actions
+        and target is not actor
+        and target.team != actor.team
+        and target.is_alive
+        and _is_in_melee_reach(actor, target, state)
+        and _has_line_of_sight(state, actor.position, target.position)
+    )
+
+
+def _is_in_melee_reach(
+    actor: Character,
+    target: Character,
+    state: CombatState,
+) -> bool:
+    return _distance(actor.position, target.position, state) <= 1
+
+
+def _available_spells(actor: Character) -> list[SpellAbility]:
+    return [
+        ability
+        for ability in actor.available_abilities
+        if isinstance(ability, SpellAbility) and _has_spell_slot(actor, ability)
+    ]
+
+
+def _spell_has_valid_target_or_no_target(
+    state: CombatState,
+    actor: Character,
+    spell: SpellAbility,
+) -> bool:
+    if spell.damage is None:
+        return True
+    return any(_can_target_spell(state, actor, target, spell) for target in state.characters)
+
+
+def _can_target_spell(
+    state: CombatState,
+    actor: Character,
+    target: Character,
+    spell: SpellAbility,
+) -> bool:
+    return (
+        target is not actor
+        and target.team != actor.team
+        and target.is_alive
+        and _distance(actor.position, target.position, state) <= spell.range
+        and _has_line_of_sight(state, actor.position, target.position)
+    )
+
+
+def _spell_system_available(actor: Character) -> bool:
+    return any(
+        hasattr(actor, attribute_name)
+        for attribute_name in (
+            "spell_slots",
+            "spell_slots_remaining",
+            "spellcasting",
+        )
+    )
+
+
+def _has_spell_slot(actor: Character, spell: SpellAbility) -> bool:
+    if not _spell_system_available(actor):
+        return False
+    if spell.spell_level <= 0:
+        return True
+
+    for attribute_name in ("spell_slots_remaining", "spell_slots"):
+        slots = getattr(actor, attribute_name, None)
+        if isinstance(slots, dict):
+            return int(slots.get(spell.spell_level, 0)) > 0
+        if isinstance(slots, int):
+            return slots > 0
+    return True
+
+
+def _has_line_of_sight(
+    state: CombatState,
+    origin: Position,
+    target: Position,
+) -> bool:
+    grid_map = state.grid_map
+    if grid_map is None:
+        return True
+    for method_name in ("has_line_of_sight", "line_of_sight"):
+        method = getattr(grid_map, method_name, None)
+        if callable(method):
+            return bool(method(origin, target))
+    return True

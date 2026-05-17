@@ -14,6 +14,7 @@ from combat.actions import (
     COMMON_ACTION_HIDE,
     COMMON_ACTION_IMPROVISED,
     COMMON_ACTION_MOVE,
+    COMMON_ACTION_OPPORTUNITY_ATTACK,
     COMMON_ACTION_READY,
     COMMON_ACTION_SEARCH,
     COMMON_ACTION_SHOVE,
@@ -32,11 +33,20 @@ from combat.actions import (
     HideAction,
     ImprovisedAction,
     MoveAction,
+    OpportunityAttackAction,
     ReadyAction,
     SearchAction,
     ShoveAction,
     StabilizeAction,
     UseObjectAction,
+)
+from combat.checks import (
+    AbilityCheckResult,
+    ContestedCheckResult,
+    passive_perception,
+    roll_ability_check,
+    roll_contested_check,
+    roll_d20,
 )
 from combat.class_features import ClassFeature, Resource, reset_resources
 from combat.environment import CombatEnvironment
@@ -69,6 +79,7 @@ from combat.rewards import (
 
 __all__ = [
     "Ability",
+    "AbilityCheckResult",
     "ActionEconomy",
     "ActionResult",
     "AttackAction",
@@ -83,6 +94,7 @@ __all__ = [
     "COMMON_ACTION_HIDE",
     "COMMON_ACTION_IMPROVISED",
     "COMMON_ACTION_MOVE",
+    "COMMON_ACTION_OPPORTUNITY_ATTACK",
     "COMMON_ACTION_READY",
     "COMMON_ACTION_SEARCH",
     "COMMON_ACTION_SHOVE",
@@ -96,6 +108,7 @@ __all__ = [
     "CombatReward",
     "CombatRewardSnapshot",
     "CombatState",
+    "ContestedCheckResult",
     "Condition",
     "DashAction",
     "DisengageAction",
@@ -112,6 +125,7 @@ __all__ = [
     "HideAction",
     "ImprovisedAction",
     "MoveAction",
+    "OpportunityAttackAction",
     "Orc",
     "Position",
     "ReadyAction",
@@ -125,6 +139,10 @@ __all__ = [
     "calculate_combat_reward",
     "create_test_encounter",
     "opposing_team",
+    "passive_perception",
+    "roll_ability_check",
+    "roll_contested_check",
+    "roll_d20",
     "reset_turn_resources",
     "reset_resources",
     "SpellAbility",
