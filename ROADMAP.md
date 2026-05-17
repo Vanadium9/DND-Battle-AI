@@ -1,22 +1,22 @@
-# Project Roadmap
+# Roadmap Проекта
 
-This roadmap tracks the next major development areas for the D&D tactical combat
-RL simulator.
+Этот roadmap описывает следующие крупные направления разработки D&D tactical
+combat RL simulator.
 
-## Current State
+## Текущее Состояние
 
-- Core combat entities are implemented with dataclasses.
-- Common D&D combat actions are implemented separately from class features.
-- Classes add features and resources, but they do not own shared logic for
-  Attack, Dash, Dodge, Help, Grapple, Shove, and similar actions.
-- Action economy tracks actions, bonus actions, reactions, movement, free object
-  interaction, and temporary combat states.
-- PPO observation encoding, action masks, model, trainer, rewards, scripts, and
-  tests are in place.
+- Core combat entities реализованы через dataclasses.
+- Общие D&D combat actions реализованы отдельно от class features.
+- Классы добавляют features и resources, но не владеют общей логикой Attack,
+  Dash, Dodge, Help, Grapple, Shove и похожих действий.
+- Action economy отслеживает actions, bonus actions, reactions, movement, free
+  object interaction и временные combat states.
+- PPO observation encoding, action masks, model, trainer, rewards, scripts и
+  tests уже есть.
 
-## Common D&D Combat Actions
+## Общие D&D Боевые Действия
 
-Implemented common actions:
+Реализованные common actions:
 
 - Attack
 - Cast Spell
@@ -35,74 +35,76 @@ Implemented common actions:
 - Opportunity Attack
 - End Turn
 
-Next work:
+Следующие задачи:
 
-- Add richer action results and event metadata for reward attribution.
-- Improve target selection and option encoding for non-attack actions.
-- Add more precise handling for Ready triggers and reaction windows.
+- Добавить более богатые action results и event metadata для reward attribution.
+- Улучшить target selection и option encoding для non-attack actions.
+- Добавить более точную обработку Ready triggers и reaction windows.
 
 ## Action Economy
 
-Implemented:
+Реализовано:
 
 - Main action availability
 - Bonus action availability
 - Reaction availability
 - Movement budget
 - Free object interaction
-- Prone, grappled, hidden, dodging, disengaged, helped, and prepared-action
-  states
+- Prone, grappled, hidden, dodging, disengaged, helped и prepared-action states
 
-Next work:
+Следующие задачи:
 
-- Add Action Surge as an explicit class feature action.
-- Add class and monster abilities that alter the normal action economy.
-- Add better round-level reaction reset semantics for multi-creature rounds.
+- Добавить Action Surge как явное class feature action.
+- Добавить class и monster abilities, которые изменяют обычную action economy.
+- Улучшить round-level reaction reset semantics для раундов с несколькими
+  существами.
 
-## Bonus Actions And Reactions
+## Bonus Actions И Reactions
 
-Implemented:
+Реализовано:
 
-- Bonus action resource exists and resets.
-- Reaction resource exists and is spent by opportunity attacks.
-- Ready stores a prepared action and trigger description.
+- Bonus action resource существует и сбрасывается.
+- Reaction resource существует и тратится opportunity attacks.
+- Ready сохраняет prepared action и trigger description.
 
-Planned:
+Запланировано:
 
-- Fighter Second Wind as a bonus action.
+- Fighter Second Wind как bonus action.
 - Rogue-style Cunning Action actions.
 - Monster-specific bonus actions.
 - Reaction triggers beyond opportunity attacks.
-- PPO masks for concrete bonus-action and reaction choices.
+- PPO masks для конкретных bonus-action и reaction choices.
 
-Complex class-specific bonus actions will be added later. They should live as
-class features or feature actions, while common action logic remains shared.
+Сложные class-specific bonus actions будут добавлены позже. Они должны жить как
+class features или feature actions, а логика common actions должна оставаться
+общей.
 
-## Items And Improvised Actions
+## Items И Improvised Actions
 
-Current behavior:
+Текущее поведение:
 
-- Use Object spends an action and logs the object use.
-- Improvised Action spends an action and logs a description.
-- Both are intentionally simplified and do not yet apply rich item or
+- Use Object тратит action и логирует использование объекта.
+- Improvised Action тратит action и логирует описание.
+- Оба действия намеренно упрощены и пока не применяют богатые item или
   environment effects.
 
-Planned:
+Запланировано:
 
-- Add item definitions and effects.
-- Add consumables, interactables, and simple battlefield objects.
-- Add improvised-action hooks that can produce explicit combat events.
+- Добавить item definitions и effects.
+- Добавить consumables, interactables и простые battlefield objects.
+- Добавить improvised-action hooks, которые могут создавать явные combat events.
 
-## Current Limitations
+## Текущие Ограничения
 
-- This is a simplified D&D-like simulator, not a complete rules engine.
-- Class features and resources are present, but many class-specific actions are
-  still placeholders.
-- Full spellcasting, saving throws, spell slots, concentration, areas of effect,
-  and condition rules are not implemented.
-- Maps have no obstacles, cover, terrain cost, or full line-of-sight model.
-- Reward shaping is heuristic and should be validated during training.
-- Observations are fixed vectors; graph/entity-based observations are future
-  work.
-- Existing checkpoints may need retraining after observation or action-space
-  changes.
+- Это упрощённый D&D-like simulator, а не полноценный rules engine.
+- Class features и resources присутствуют, но многие class-specific actions пока
+  placeholders.
+- Full spellcasting, saving throws, spell slots, concentration, areas of effect
+  и condition rules пока не реализованы.
+- Maps не имеют obstacles, cover, terrain cost или полноценной line-of-sight
+  модели.
+- Reward shaping эвристический и должен проверяться в процессе обучения.
+- Observations являются fixed vectors; graph/entity-based observations остаются
+  будущей задачей.
+- Existing checkpoints могут потребовать retraining после изменений observation
+  или action space.

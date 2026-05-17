@@ -1,14 +1,14 @@
 # D&D Tactical Combat RL Simulator
 
-Python 3.11+ project for experimenting with reinforcement learning in a small
-D&D-like tactical combat environment.
+Python 3.11+ проект для экспериментов с reinforcement learning в небольшом
+D&D-like симуляторе тактического боя.
 
-The project currently includes a grid-based combat simulator, common D&D combat
-actions, action economy, fixed-vector observations, hierarchical PPO action
-masks, a PyTorch actor-critic model, a PPO trainer, demo scripts, and pytest
-coverage for core behavior.
+Сейчас проект включает grid-based симулятор боя, общие D&D боевые действия,
+action economy, fixed-vector observations, иерархические PPO action masks,
+PyTorch actor-critic модель, PPO trainer, demo scripts и pytest-покрытие
+ключевого поведения.
 
-## Project Structure
+## Структура проекта
 
 ```text
 src/
@@ -26,12 +26,12 @@ README.md
 ROADMAP.md
 ```
 
-## Common D&D Combat Actions
+## Общие D&D Боевые Действия
 
-Common combat actions are implemented separately from character classes in
+Общие боевые действия реализованы отдельно от классов персонажей в
 `src/combat/common_actions.py`.
 
-Implemented common actions include:
+Сейчас реализованы:
 
 - `AttackAction`
 - `CastSpellAction`
@@ -50,13 +50,13 @@ Implemented common actions include:
 - `OpportunityAttackAction`
 - `EndTurnAction`
 
-Weapon attacks belong to creatures through their `weapons` list. They are not
-class features. Attack effectiveness depends on stats, proficiency bonus,
-weapon configuration, and attack bonus.
+Оружейные атаки принадлежат существам через список `weapons`. Они не являются
+классовыми способностями. Эффективность атаки зависит от характеристик,
+proficiency bonus, настроек оружия и attack bonus.
 
 ## Action Economy
 
-Each creature tracks turn resources in `src/combat/action_economy.py`:
+Каждое существо хранит ресурсы хода в `src/combat/action_economy.py`:
 
 - `action_available`
 - `bonus_action_available`
@@ -64,43 +64,44 @@ Each creature tracks turn resources in `src/combat/action_economy.py`:
 - `movement_remaining`
 - `free_object_interaction_available`
 
-Main actions such as Attack, Dash, Dodge, Help, Hide, Search, Ready, Use Object,
-Grapple, Shove, Stabilize, and Improvised Action spend `action_available`.
-Movement spends `movement_remaining`. Reactions spend `reaction_available`.
+Основные действия, такие как Attack, Dash, Dodge, Help, Hide, Search, Ready,
+Use Object, Grapple, Shove, Stabilize и Improvised Action, тратят
+`action_available`. Движение тратит `movement_remaining`. Реакции тратят
+`reaction_available`.
 
-Combat state also tracks temporary D&D-like states such as prone, grappled,
-hidden, dodging, disengaged, helped targets, prepared actions, and reaction use.
+Combat state также хранит временные D&D-like состояния: prone, grappled, hidden,
+dodging, disengaged, helped targets, prepared actions и использование реакции.
 
-## Classes, Features, And Resources
+## Классы, Features И Resources
 
-Character classes are modeled as metadata plus feature/resource definitions.
-Classes add `class_features` and `resources`, but they do not own the shared
-logic for Attack, Dash, Dodge, Help, Grapple, Shove, and other common actions.
+Классы персонажей сейчас моделируются как metadata плюс definitions для
+features/resources. Классы добавляют `class_features` и `resources`, но не
+владеют общей логикой Attack, Dash, Dodge, Help, Grapple, Shove и других common
+actions.
 
-For example, Fighter presets can have resources such as Action Surge and Second
-Wind reserved in their character data, while the common action implementation
-remains class-agnostic.
+Например, fighter presets могут иметь ресурсы Action Surge и Second Wind в
+данных персонажа, но сама реализация common actions остаётся независимой от
+класса.
 
-## Bonus Actions And Reactions
+## Bonus Actions И Reactions
 
-The action economy already reserves bonus actions and reactions:
+Action economy уже резервирует bonus actions и reactions:
 
-- `bonus_action_available` exists and resets each turn.
-- `reaction_available` exists and is spent by `OpportunityAttackAction`.
-- `ReadyAction` stores a prepared action and trigger description.
+- `bonus_action_available` существует и сбрасывается каждый ход.
+- `reaction_available` существует и тратится `OpportunityAttackAction`.
+- `ReadyAction` сохраняет prepared action и trigger description.
 
-Complex class-specific bonus actions and richer reaction triggers are planned
-for later. Current PPO action masks reserve bonus-action and reaction categories,
-but most class-specific options are intentionally not implemented yet.
+Сложные классовые bonus actions и более богатые reaction triggers будут
+добавлены позже. Текущие PPO action masks резервируют категории bonus action и
+reaction, но большинство class-specific вариантов намеренно ещё не реализовано.
 
-## Observations, Action Space, And PPO
+## Observations, Action Space И PPO
 
-`src/agents/observation.py` encodes combat state into a fixed-size PyTorch
-tensor. The encoder includes actor resources, statuses, common-action
-availability, nearby allies, nearby enemies, distances, and targetability
-features.
+`src/agents/observation.py` кодирует combat state в fixed-size PyTorch tensor.
+Encoder включает ресурсы актёра, состояния, доступность common actions,
+ближайших союзников, ближайших врагов, дистанции и признаки targetability.
 
-`src/agents/action_space.py` defines a hierarchical action space:
+`src/agents/action_space.py` задаёт иерархическое пространство действий:
 
 - action category
 - main action type
@@ -108,63 +109,65 @@ features.
 - move index
 - option index
 
-`src/agents/ppo_model.py` implements a shared-encoder actor-critic network with
-separate policy heads and action masking.
+`src/agents/ppo_model.py` реализует actor-critic сеть с общим encoder,
+отдельными policy heads и action masking.
 
 ## Rewards
 
-`src/combat/rewards.py` includes reward shaping for:
+`src/combat/rewards.py` содержит reward shaping для:
 
-- damage dealt and taken
-- kills and deaths
-- victory and defeat
-- long or useless turns
-- tactical common actions such as Grapple, Shove, Dodge, Disengage, and Help
-- penalties for low-value Dash, Hide, Ready, Use Object, and Improvised actions
+- нанесённого и полученного урона
+- убийств и смертей
+- победы и поражения
+- слишком длинных или бесполезных ходов
+- тактических common actions, таких как Grapple, Shove, Dodge, Disengage и Help
+- штрафов за low-value Dash, Hide, Ready, Use Object и Improvised actions
 
-Tactical action rewards are intentionally small compared with victory, enemy
-kills, and preventing allied deaths.
+Тактические награды намеренно маленькие по сравнению с победой, убийством врага
+и предотвращением смерти союзника.
 
-## Current Limitations
+## Текущие Ограничения
 
-- Rules are simplified and are not a complete D&D 5e implementation.
-- Complex class-specific bonus actions are not implemented yet.
-- Spellcasting exists only as a simple `SpellAbility` path; full spell slots,
-  saves, concentration, areas, and spell lists are not implemented.
-- Items and improvised actions are simplified placeholders without rich effects.
-- Ready stores prepared action data, but complex trigger resolution is not
-  implemented.
-- Maps do not yet model obstacles, terrain cost, cover, or full line of sight.
-- PPO uses fixed-vector observations rather than graph neural networks.
-- Existing checkpoints can become incompatible when observation or policy-head
-  sizes change.
+- Правила упрощены; это не полная реализация D&D 5e.
+- Сложные class-specific bonus actions пока не реализованы.
+- Spellcasting существует только как простой путь через `SpellAbility`; full
+  spell slots, saves, concentration, areas и spell lists пока не реализованы.
+- Items и improvised actions являются упрощёнными placeholders без богатых
+  эффектов.
+- Ready сохраняет prepared action data, но сложное resolution для trigger ещё
+  не реализовано.
+- Карты пока не моделируют obstacles, terrain cost, cover или полноценный line
+  of sight.
+- PPO использует fixed-vector observations вместо graph neural networks.
+- Existing checkpoints могут стать несовместимыми при изменении observation или
+  policy-head sizes.
 
-## Setup
+## Установка
 
 ```bash
 python -m venv .venv
 pip install -r requirements.txt
 ```
 
-## Run Tests
+## Запуск Тестов
 
 ```bash
 python -m pytest
 ```
 
-On this workspace, using the local virtual environment:
+В этом workspace через локальное virtual environment:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-## Train PPO
+## Обучение PPO
 
 ```bash
 python scripts/train_ppo.py --episodes 100 --seed 0 --checkpoint checkpoints/ppo_actor_critic.pt
 ```
 
-## Run Demo
+## Запуск Demo
 
 ```bash
 python scripts/run_demo.py --checkpoint checkpoints/ppo_actor_critic.pt
@@ -172,4 +175,4 @@ python scripts/run_demo.py --checkpoint checkpoints/ppo_actor_critic.pt
 
 ## Roadmap
 
-See [ROADMAP.md](ROADMAP.md) for planned work and current priorities.
+См. [ROADMAP.md](ROADMAP.md) с планируемыми работами и текущими приоритетами.
