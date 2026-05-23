@@ -453,7 +453,26 @@ class CombatEnvironment:
             "speed": character.speed,
             "team": character.team.value,
             "class_name": character.class_name,
+            "subclass_name": character.subclass_name,
+            "race_name": character.race_name,
+            "race_traits": (
+                {
+                    "size": character.race_traits.size,
+                    "speed": character.race_traits.speed,
+                    "darkvision_range": character.race_traits.darkvision_range,
+                    "skill_proficiencies": list(character.race_traits.skill_proficiencies),
+                    "weapon_proficiencies": list(character.race_traits.weapon_proficiencies),
+                    "saving_throw_advantages": list(
+                        character.race_traits.saving_throw_advantages
+                    ),
+                    "damage_resistances": list(character.race_traits.damage_resistances),
+                    "special_traits": list(character.race_traits.special_traits),
+                }
+                if character.race_traits is not None
+                else None
+            ),
             "level": character.level,
+            "experience": character.experience,
             "proficiency_bonus": character.proficiency_bonus,
             "alive": character.is_alive,
             "action_available": character.action_economy.action_available,

@@ -12,6 +12,7 @@ from combat.class_features import ClassFeature, Resource, reset_resources
 
 if TYPE_CHECKING:
     from combat.map import GridMap
+    from combat.race_traits import RaceTraits
 
 
 class Team(Enum):
@@ -63,8 +64,13 @@ class Character:
     stats: Stats
     team: Team
     class_name: str | None = None
+    subclass_name: str | None = None
     level: int = 1
+    experience: int = 0
     proficiency_bonus: int = 2
+    race_name: str | None = None
+    race_traits: RaceTraits | None = None
+    size: str = "Medium"
     weapons: list[WeaponAttack] = field(default_factory=list)
     common_actions: list[str] = field(
         default_factory=lambda: [

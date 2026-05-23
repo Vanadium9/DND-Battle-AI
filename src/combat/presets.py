@@ -13,6 +13,7 @@ from combat.models import (
     Team,
     WeaponAttack,
 )
+from rules.progression import build_class_features, build_class_resources
 
 
 def FighterChampionGreatsword(position: Position | None = None) -> Character:
@@ -28,7 +29,9 @@ def FighterChampionGreatsword(position: Position | None = None) -> Character:
         stats=Stats(str=18, dex=12, con=16, int=10, wis=11, cha=10),
         team=Team.PLAYERS,
         class_name="Fighter",
+        subclass_name="Champion",
         level=3,
+        experience=900,
         proficiency_bonus=2,
         weapons=[
             WeaponAttack(
@@ -41,8 +44,8 @@ def FighterChampionGreatsword(position: Position | None = None) -> Character:
                 damage_ability_score="str",
             )
         ],
-        class_features=_fighter_features(),
-        resources=_fighter_resources(),
+        class_features=_fighter_features("Champion", 3),
+        resources=_fighter_resources("Champion", 3),
     )
 
 
@@ -59,7 +62,9 @@ def FighterArcher(position: Position | None = None) -> Character:
         stats=Stats(str=10, dex=18, con=14, int=10, wis=12, cha=10),
         team=Team.PLAYERS,
         class_name="Fighter",
+        subclass_name="Champion",
         level=3,
+        experience=900,
         proficiency_bonus=2,
         weapons=[
             WeaponAttack(
@@ -72,8 +77,8 @@ def FighterArcher(position: Position | None = None) -> Character:
                 damage_ability_score="dex",
             )
         ],
-        class_features=_fighter_features(),
-        resources=_fighter_resources(),
+        class_features=_fighter_features("Champion", 3),
+        resources=_fighter_resources("Champion", 3),
     )
 
 
@@ -152,25 +157,12 @@ def create_test_encounter() -> CombatState:
     )
 
 
-def _fighter_features() -> list[ClassFeature]:
-    return [
-        ClassFeature(
-            name="Action Surge",
-            description="Class feature resource for a future extra action implementation.",
-            resource_name="action_surge",
-            required_level=2,
-        ),
-        ClassFeature(
-            name="Second Wind",
-            description="Class feature resource for a future self-heal implementation.",
-            resource_name="second_wind",
-            required_level=1,
-        ),
-    ]
+def _fighter_features(subclass_name: str | None = None, level: int = 3) -> list[ClassFeature]:
+    return build_class_features("Fighter", level, subclass_name)
 
 
-def _fighter_resources() -> dict[str, Resource]:
-    return {
-        "action_surge": Resource(name="action_surge", max_uses=1),
-        "second_wind": Resource(name="second_wind", max_uses=1),
-    }
+def _fighter_resources(
+    subclass_name: str | None = None,
+    level: int = 3,
+) -> dict[str, Resource]:
+    return build_class_resources(_fighter_features(subclass_name, level))

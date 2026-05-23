@@ -741,3 +741,95 @@ Action masks должны учитывать:
 - tie-breaker воспроизводим при seed
 - мёртвое существо пропускает ход
 - после полного круга увеличивается round_number.
+
+
+27.
+Добавь систему прогрессии персонажа с 1 по 5 уровень.
+
+Файлы:
+- src/rules/progression.py
+- src/combat/character.py
+- src/character/schema.py
+
+Требования:
+- Character должен иметь:
+  - level
+  - experience
+  - proficiency_bonus
+  - class_name
+  - subclass_name optional
+- поддерживать уровни 1-5
+- таблица XP thresholds:
+  - level 1: 0
+  - level 2: 300
+  - level 3: 900
+  - level 4: 2700
+  - level 5: 6500
+- proficiency bonus:
+  - levels 1-4: +2
+  - level 5: +3
+- добавить функцию:
+  - get_level_for_xp(xp) -> int
+  - get_proficiency_bonus(level) -> int
+  - can_level_up(character) -> bool
+  - apply_level_up(character)
+- при повышении уровня пересчитывать:
+  - proficiency_bonus
+  - class features
+  - spell slots, если персонаж spellcaster
+  - available actions/features
+- в бою уровень не должен автоматически повышаться посреди encounter, только после завершения боя
+
+Добавь тесты:
+- XP thresholds работают корректно
+- proficiency bonus меняется на 5 уровне
+- уровень не превышает 5
+- level up обновляет features.
+
+
+28.
+Добавь систему расовых особенностей персонажей.
+
+Файлы:
+- src/rules/races.py
+- src/combat/race_traits.py
+- src/character/schema.py
+
+Требования:
+- Character должен иметь:
+  - race_name
+  - race_traits
+- реализовать data-driven RaceDefinition:
+  - name
+  - ability_score_bonuses
+  - speed
+  - size
+  - darkvision_range optional
+  - skill_proficiencies
+  - weapon_proficiencies
+  - saving_throw_advantages
+  - damage_resistances
+  - special_traits
+
+Для MVP реализовать:
+- Human
+- Dwarf
+- Elf
+- Halfling
+
+Боевые эффекты:
+- racial speed влияет на movement_remaining
+- racial proficiencies влияют на владение оружием
+- racial resistances добавляются в damage system
+- darkvision пока хранить как feature, но не использовать без line of sight / lighting
+- Halfling Lucky можно сделать stub или упрощённо:
+  - reroll natural 1 once per roll
+  - включить через feature flag
+
+Не реализуй пока все подрасы.
+Добавь CustomRace fallback, но только для импортированных персонажей и с warning.
+
+Добавь тесты:
+- race bonuses применяются
+- speed берётся из race или character override
+- resistance от race работает в damage system.

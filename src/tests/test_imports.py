@@ -55,6 +55,14 @@ from combat import (
     ShoveAction,
     create_test_encounter,
     calculate_combat_reward,
+    RaceTraits,
+    apply_race_traits,
+    XP_THRESHOLDS,
+    apply_level_up,
+    can_level_up,
+    get_level_for_xp,
+    get_proficiency_bonus,
+    has_damage_resistance,
     roll_initiative_check,
     roll_initiative_order,
     reset_turn_resources,
@@ -64,18 +72,27 @@ from combat import (
     CombatRewardSnapshot,
     opposing_team,
     snapshot_combat_state,
+    sync_character_progression,
     Team,
+    use_halfling_lucky,
     UseObjectAction,
     WeaponAttack,
+    weapon_is_racially_proficient,
 )
+from character import CharacterProgressionSchema, CharacterRaceSchema, CharacterSchema
 from configs import CombatConfig, PPOConfig, TrainingConfig
 from rules import (
     DEFAULT_RULESET_NAME,
+    MAX_SUPPORTED_LEVEL,
+    MIN_SUPPORTED_LEVEL,
+    RaceDefinition,
     Ruleset,
     RulesetRegistry,
+    get_race_definition,
     get_active_ruleset,
     get_unsupported_reason,
     is_supported_content,
+    is_supported_race,
 )
 from training import EpisodeStats, PPOTrainer, RolloutBuffer, Trainer
 
@@ -140,22 +157,41 @@ def test_project_imports() -> None:
     assert Position is not None
     assert calculate_combat_reward is not None
     assert create_test_encounter is not None
+    assert RaceTraits is not None
+    assert apply_race_traits is not None
+    assert XP_THRESHOLDS is not None
+    assert apply_level_up is not None
+    assert can_level_up is not None
+    assert get_level_for_xp is not None
+    assert get_proficiency_bonus is not None
+    assert has_damage_resistance is not None
     assert roll_initiative_check is not None
     assert roll_initiative_order is not None
     assert opposing_team is not None
     assert reset_turn_resources is not None
     assert snapshot_combat_state is not None
+    assert sync_character_progression is not None
     assert Team is not None
+    assert use_halfling_lucky is not None
     assert UseObjectAction is not None
+    assert weapon_is_racially_proficient is not None
     assert CombatConfig is not None
     assert PPOConfig is not None
     assert TrainingConfig is not None
+    assert CharacterProgressionSchema is not None
+    assert CharacterRaceSchema is not None
+    assert CharacterSchema is not None
     assert DEFAULT_RULESET_NAME is not None
+    assert MAX_SUPPORTED_LEVEL is not None
+    assert MIN_SUPPORTED_LEVEL is not None
+    assert RaceDefinition is not None
     assert Ruleset is not None
     assert RulesetRegistry is not None
+    assert get_race_definition is not None
     assert get_active_ruleset is not None
     assert get_unsupported_reason is not None
     assert is_supported_content is not None
+    assert is_supported_race is not None
     assert EpisodeStats is not None
     assert PPOTrainer is not None
     assert RolloutBuffer is not None

@@ -34,6 +34,7 @@ class WeaponAttack(Ability):
     ability_score: str = "str"
     damage_ability_score: str | None = None
     damage_bonus: int = 0
+    damage_type: str | None = None
     proficient: bool = True
 
     def attack_modifier(self, attacker: Character) -> int:
@@ -58,6 +59,7 @@ class SpellAbility(Ability):
 
     spell_level: int = 0
     damage: str | None = None
+    damage_type: str | None = None
     save_dc: int | None = None
 
 

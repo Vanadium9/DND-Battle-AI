@@ -14,6 +14,7 @@ from combat.checks import (
     roll_contested_check,
 )
 from combat.models import Character, CombatState, Position
+from combat.race_traits import apply_damage_resistance, use_halfling_lucky
 
 
 COMMON_ACTION_MOVE = "move"
@@ -162,8 +163,8 @@ class AttackAction(CombatAction):
                 ),
             )
 
-        damage = _roll_damage(weapon.damage) + weapon.damage_modifier(actor)
-        damage = max(0, damage)
+        raw_damage = max(0, _roll_damage(weapon.damage) + weapon.damage_modifier(actor))
+        damage = apply_damage_resistance(target, raw_damage, weapon.damage_type)
         target.hp = max(0, target.hp - damage)
         if target.hp > 0:
             target.stable = False
@@ -248,7 +249,8 @@ class OpportunityAttackAction(CombatAction):
                 ),
             )
 
-        damage = max(0, _roll_damage(weapon.damage) + weapon.damage_modifier(actor))
+        raw_damage = max(0, _roll_damage(weapon.damage) + weapon.damage_modifier(actor))
+        damage = apply_damage_resistance(target, raw_damage, weapon.damage_type)
         target.hp = max(0, target.hp - damage)
         if target.hp > 0:
             target.stable = False
@@ -307,7 +309,11 @@ class CastSpellAction(CombatAction):
         actor.action_economy.spend_action()
         target = self._target_for_spell(combat_state, actor, spell)
         if spell.damage is not None and target is not None:
-            damage = _roll_damage(spell.damage)
+            damage = apply_damage_resistance(
+                target,
+                _roll_damage(spell.damage),
+                spell.damage_type,
+            )
             target.hp = max(0, target.hp - damage)
             return ActionResult(
                 True,
@@ -893,14 +899,22 @@ def _attack_roll(
 ) -> int:
     has_advantage = actor.hidden or _consume_help_advantage(actor, target, combat_state)
     has_disadvantage = target.dodging_until_start_of_next_turn
-    first_roll = random.randint(1, 20)
+    first_roll = _roll_d20_with_racial_traits(actor)
     if has_advantage == has_disadvantage:
         roll = first_roll
     else:
-        second_roll = random.randint(1, 20)
+        second_roll = _roll_d20_with_racial_traits(actor)
         roll = max(first_roll, second_roll) if has_advantage else min(first_roll, second_roll)
     actor.hidden = False
     return roll
+
+
+def _roll_d20_with_racial_traits(actor: Character) -> int:
+    roll = random.randint(1, 20)
+    traits = getattr(actor, "race_traits", None)
+    if roll != 1 or traits is None or not traits.halfling_lucky_enabled:
+        return roll
+    return use_halfling_lucky(actor, roll, random.randint(1, 20))
 
 
 def _consume_help_advantage(

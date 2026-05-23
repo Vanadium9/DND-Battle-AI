@@ -29,6 +29,7 @@ def test_fighter_champion_greatsword_preset() -> None:
     assert all(isinstance(feature, ClassFeature) for feature in fighter.class_features)
     assert {feature.name for feature in fighter.class_features} == {
         "Action Surge",
+        "Improved Critical",
         "Second Wind",
     }
     assert set(fighter.resources) == {"action_surge", "second_wind"}
