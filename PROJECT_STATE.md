@@ -646,3 +646,98 @@ Action masks должны учитывать:
 - штраф за UseObject/ImprovisedAction без эффекта
 
 Не делай reward слишком большим: эти награды должны быть меньше, чем победа, убийство врага и предотвращение смерти союзника.
+
+
+25.
+Добавь ruleset registry для проекта.
+
+Цель:
+проект должен явно понимать, какие правила D&D-like 5e поддерживаются, а какие нет.
+
+Файлы:
+- src/rules/ruleset.py
+- src/rules/registry.py
+- configs/ruleset_srd5e_minimal.yaml
+
+Требования:
+- зафиксировать ruleset_name = "srd5e_minimal_2014"
+- supported_levels: 1-5
+- supported_classes:
+  - Fighter
+  - Cleric
+  - Wizard
+- supported_subclasses:
+  - Fighter: Champion
+  - Cleric: Life Domain
+  - Wizard: School of Evocation
+- supported_races:
+  - Human
+  - Dwarf
+  - Elf
+  - Halfling
+- supported_common_actions:
+  - Attack
+  - CastSpell
+  - Dash
+  - Disengage
+  - Dodge
+  - Help
+  - Hide
+  - Search
+  - UseObject
+  - Ready
+  - Grapple
+  - Shove
+  - Stabilize
+  - EndTurn
+- supported_spell_levels: 0-3
+- supported_content_policy:
+  - unsupported classes are rejected during import
+  - unsupported spells are marked as unavailable
+  - unsupported features are saved as notes but not used in combat
+  - unsupported races fall back to CustomRace only after user confirmation
+
+Добавь функцию:
+- is_supported_content(content_type, name) -> bool
+- get_unsupported_reason(content_type, name) -> str
+
+Обнови README:
+- проект реализует ограниченное подмножество D&D-like 5e
+- цель — корректная работа боевого AI, а не полная цифровая копия D&D.
+
+
+26.
+Реализуй систему инициативы боя.
+
+Файлы:
+- src/combat/initiative.py
+- src/combat/environment.py
+- src/combat/checks.py
+
+Требования:
+- в начале боя каждое существо бросает инициативу:
+  - d20 + DEX modifier
+- результат инициативы сохраняется в CombatState
+- порядок ходов определяется по убыванию инициативы
+- при равенстве инициативы использовать:
+  1. больший DEX modifier
+  2. случайный tie-breaker с seed
+- CombatEnvironment должен хранить:
+  - initiative_order
+  - current_turn_index
+  - round_number
+- после последнего существа в initiative_order начинается новый раунд
+- мёртвые / incapacitated существа пропускают ход
+- новые состояния начала/конца хода должны работать через initiative order
+
+Добавь логирование:
+- броски инициативы
+- итоговый порядок ходов
+- начало каждого раунда
+- текущий активный участник
+
+Добавь тесты:
+- порядок инициативы корректен
+- tie-breaker воспроизводим при seed
+- мёртвое существо пропускает ход
+- после полного круга увеличивается round_number.

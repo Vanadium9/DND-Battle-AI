@@ -109,6 +109,17 @@ class Character:
         return not self.is_alive
 
     @property
+    def is_incapacitated(self) -> bool:
+        return any(
+            condition.name.strip().casefold() in {"incapacitated", "unconscious"}
+            for condition in self.conditions
+        )
+
+    @property
+    def can_take_turn(self) -> bool:
+        return self.is_alive and not self.is_incapacitated
+
+    @property
     def alive(self) -> bool:
         return self.is_alive
 
@@ -289,12 +300,32 @@ class CombatState:
     grid_map: GridMap | None = None
     round_number: int = 1
     turn_index: int = 0
+    initiative_order: list[int] = field(default_factory=list)
+    current_turn_index: int = 0
+    initiative_rolls: dict[int, int] = field(default_factory=dict)
+    initiative_totals: dict[int, int] = field(default_factory=dict)
+    initiative_dex_modifiers: dict[int, int] = field(default_factory=dict)
+    initiative_tie_breakers: dict[int, float] = field(default_factory=dict)
+    skipped_turn_actor_ids: list[int] = field(default_factory=list)
+
+    @property
+    def active_actor_id(self) -> int | None:
+        if not self.characters:
+            return None
+        if self.initiative_order:
+            order_index = self.current_turn_index % len(self.initiative_order)
+            actor_id = self.initiative_order[order_index]
+            if actor_id < 0 or actor_id >= len(self.characters):
+                return None
+            return actor_id
+        return self.turn_index % len(self.characters)
 
     @property
     def active_character(self) -> Character | None:
-        if not self.characters:
+        actor_id = self.active_actor_id
+        if actor_id is None:
             return None
-        return self.characters[self.turn_index % len(self.characters)]
+        return self.character_at(actor_id)
 
     @property
     def living_characters(self) -> list[Character]:
@@ -324,16 +355,29 @@ class CombatState:
         if not self.characters:
             return None
 
-        current_index = self.turn_index % len(self.characters)
+        order = self.initiative_order or list(range(len(self.characters)))
+        if not order:
+            return None
+
+        self.skipped_turn_actor_ids = []
+        current_index = self.current_turn_index % len(order)
+        if not self.initiative_order:
+            current_index = self.turn_index % len(self.characters)
         wrapped = False
-        for offset in range(1, len(self.characters) + 1):
-            next_index = (current_index + offset) % len(self.characters)
+        for offset in range(1, len(order) + 1):
+            next_index = (current_index + offset) % len(order)
             if next_index == 0:
                 wrapped = True
-            if self.characters[next_index].is_alive:
-                self.turn_index = next_index
+            character_id = order[next_index]
+            character = self.character_at(character_id)
+            if character is None:
+                continue
+            if character.can_take_turn:
+                self.current_turn_index = next_index
+                self.turn_index = character_id
                 if wrapped:
                     self.round_number += 1
-                return self.reset_turn_resources(next_index)
+                return self.reset_turn_resources(character_id)
+            self.skipped_turn_actor_ids.append(character_id)
 
         return None

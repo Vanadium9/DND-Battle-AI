@@ -89,7 +89,7 @@ def build_action_masks(state: CombatState, actor_id: int) -> dict[str, torch.Ten
 
     actor = state.character_at(actor_id)
     masks = _empty_masks(state, actor)
-    if actor is None or actor.is_dead or not _is_active_actor(state, actor_id):
+    if actor is None or not actor.can_take_turn or not _is_active_actor(state, actor_id):
         return masks
 
     main_action_type_mask = _build_main_action_type_mask(state, actor_id, actor)
@@ -491,7 +491,7 @@ def _is_valid_weapon_target(
     if actor is None or target is None:
         return False
     if (
-        actor.is_dead
+        not actor.can_take_turn
         or target.is_dead
         or target is actor
         or target.team == actor.team
@@ -557,11 +557,15 @@ def _distance(first: Position, second: Position, state: CombatState) -> int:
 
 
 def _is_active_actor(state: CombatState, actor_id: int) -> bool:
-    return bool(state.characters) and actor_id == state.turn_index % len(state.characters)
+    return actor_id == state.active_actor_id
 
 
 def _can_spend_action(actor: Character, action_name: str) -> bool:
-    return actor.action_economy.action_available and action_name in actor.common_actions
+    return (
+        actor.can_take_turn
+        and actor.action_economy.action_available
+        and action_name in actor.common_actions
+    )
 
 
 def _can_cast_spell(state: CombatState, actor: Character) -> bool:

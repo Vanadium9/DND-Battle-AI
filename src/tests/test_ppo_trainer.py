@@ -18,6 +18,7 @@ def make_trainer(rollout_steps: int = 4) -> PPOTrainer:
             Goblin(Position(1, 0)),
         ],
         grid_map=GridMap(width=8, height=8),
+        use_initiative=False,
         log_to_console=False,
     )
     model = PPOActorCritic(target_count=6, move_count=64, hidden_sizes=(32,))

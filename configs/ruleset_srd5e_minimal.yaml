@@ -1,0 +1,39 @@
+ruleset_name: srd5e_minimal_2014
+supported_levels: 1-5
+supported_classes:
+  - Fighter
+  - Cleric
+  - Wizard
+supported_subclasses:
+  Fighter:
+    - Champion
+  Cleric:
+    - Life Domain
+  Wizard:
+    - School of Evocation
+supported_races:
+  - Human
+  - Dwarf
+  - Elf
+  - Halfling
+supported_common_actions:
+  - Attack
+  - CastSpell
+  - Dash
+  - Disengage
+  - Dodge
+  - Help
+  - Hide
+  - Search
+  - UseObject
+  - Ready
+  - Grapple
+  - Shove
+  - Stabilize
+  - EndTurn
+supported_spell_levels: 0-3
+supported_content_policy:
+  unsupported_classes: unsupported classes are rejected during import
+  unsupported_spells: unsupported spells are marked as unavailable
+  unsupported_features: unsupported features are saved as notes but not used in combat
+  unsupported_races: unsupported races fall back to CustomRace only after user confirmation

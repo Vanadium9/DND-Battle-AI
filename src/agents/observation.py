@@ -211,7 +211,7 @@ def _has_spells(character: Character) -> bool:
 
 def _can_spend_action(actor: Character, action_name: str) -> bool:
     return (
-        actor.is_alive
+        actor.can_take_turn
         and actor.action_economy.action_available
         and action_name in actor.common_actions
     )

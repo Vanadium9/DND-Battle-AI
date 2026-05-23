@@ -92,6 +92,23 @@ class AbilityCheckResult:
 
 
 @dataclass(frozen=True)
+class InitiativeCheckResult:
+    """Detailed result of one initiative roll."""
+
+    character_name: str
+    roll: int
+    dex_modifier: int
+    total: int
+
+    @property
+    def log(self) -> str:
+        return (
+            f"initiative: d20={self.roll}, dex_mod={self.dex_modifier}, "
+            f"total={self.total}"
+        )
+
+
+@dataclass(frozen=True)
 class ContestedCheckResult:
     """Detailed result of a contested ability check."""
 
@@ -123,10 +140,27 @@ def ability_modifier(score: int) -> int:
     return (int(score) - 10) // 2
 
 
-def roll_d20() -> int:
+def roll_d20(rng: random.Random | None = None) -> int:
     """Roll one d20."""
 
-    return random.randint(1, 20)
+    random_source = rng or random
+    return random_source.randint(1, 20)
+
+
+def roll_initiative_check(
+    character: Character,
+    rng: random.Random | None = None,
+) -> InitiativeCheckResult:
+    """Roll initiative as d20 plus DEX modifier."""
+
+    roll = roll_d20(rng)
+    dex_modifier = ability_modifier(character.stats.dex)
+    return InitiativeCheckResult(
+        character_name=character.name,
+        roll=roll,
+        dex_modifier=dex_modifier,
+        total=roll + dex_modifier,
+    )
 
 
 def roll_ability_check(

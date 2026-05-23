@@ -15,8 +15,11 @@ src/
   agents/      observation encoder, action space, PPO model
   combat/      combat models, actions, rewards, encounters
   configs/     training/config objects
+  rules/       ruleset registry and supported content policy
   tests/       pytest suite
   training/    PPO rollout and training logic
+configs/
+  ruleset_srd5e_minimal.yaml
 scripts/
   run_demo.py
   train_ppo.py
@@ -25,6 +28,33 @@ requirements.txt
 README.md
 ROADMAP.md
 ```
+
+## Ruleset Registry
+
+Проект реализует ограниченное подмножество D&D-like 5e. Цель проекта —
+корректная работа боевого AI в тактическом симуляторе, а не полная цифровая
+копия D&D.
+
+Активный ruleset зафиксирован как `srd5e_minimal_2014` в
+`configs/ruleset_srd5e_minimal.yaml`. Код registry находится в
+`src/rules/registry.py` и `src/rules/ruleset.py`.
+
+Поддерживаемая поверхность:
+
+- уровни 1-5
+- классы: Fighter, Cleric, Wizard
+- подклассы: Fighter Champion, Cleric Life Domain, Wizard School of Evocation
+- расы: Human, Dwarf, Elf, Halfling
+- common actions: Attack, CastSpell, Dash, Disengage, Dodge, Help, Hide,
+  Search, UseObject, Ready, Grapple, Shove, Stabilize, EndTurn
+- уровни заклинаний 0-3
+
+Для проверок доступны `is_supported_content(content_type, name)` и
+`get_unsupported_reason(content_type, name)`. Неподдерживаемые классы должны
+отклоняться при импорте, неподдерживаемые заклинания помечаются недоступными,
+неподдерживаемые features сохраняются как notes и не используются в бою, а
+неподдерживаемые расы могут перейти в `CustomRace` только после подтверждения
+пользователя.
 
 ## Общие D&D Боевые Действия
 
@@ -128,7 +158,8 @@ Encoder включает ресурсы актёра, состояния, дос
 
 ## Текущие Ограничения
 
-- Правила упрощены; это не полная реализация D&D 5e.
+- Правила упрощены; это ограниченное подмножество D&D-like 5e для боевого AI,
+  а не полная цифровая копия D&D.
 - Сложные class-specific bonus actions пока не реализованы.
 - Spellcasting существует только как простой путь через `SpellAbility`; full
   spell slots, saves, concentration, areas и spell lists пока не реализованы.

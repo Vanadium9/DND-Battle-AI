@@ -82,6 +82,7 @@ def test_dodge_and_disengage_expire_at_correct_turn_boundaries() -> None:
     environment = CombatEnvironment(
         characters=[hero, enemy],
         grid_map=GridMap(width=3, height=3),
+        use_initiative=False,
         log_to_console=False,
     )
 

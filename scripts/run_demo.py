@@ -131,7 +131,9 @@ def run_battle_demo(
             break
 
         state = environment.combat_state
-        actor_id = state.turn_index % len(state.characters)
+        actor_id = state.active_actor_id
+        if actor_id is None:
+            break
         actor = state.characters[actor_id]
         observation = encode_observation(state, actor_id)
         masks = fit_masks_for_model(build_action_masks(state, actor_id), model)

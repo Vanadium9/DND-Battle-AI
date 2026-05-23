@@ -41,6 +41,9 @@ from combat import (
     HelpAction,
     HideAction,
     ImprovisedAction,
+    InitiativeCheckResult,
+    InitiativeResult,
+    InitiativeRoll,
     EncounterGenerator,
     MoveAction,
     Orc,
@@ -52,6 +55,8 @@ from combat import (
     ShoveAction,
     create_test_encounter,
     calculate_combat_reward,
+    roll_initiative_check,
+    roll_initiative_order,
     reset_turn_resources,
     SpellAbility,
     StabilizeAction,
@@ -64,6 +69,14 @@ from combat import (
     WeaponAttack,
 )
 from configs import CombatConfig, PPOConfig, TrainingConfig
+from rules import (
+    DEFAULT_RULESET_NAME,
+    Ruleset,
+    RulesetRegistry,
+    get_active_ruleset,
+    get_unsupported_reason,
+    is_supported_content,
+)
 from training import EpisodeStats, PPOTrainer, RolloutBuffer, Trainer
 
 
@@ -107,6 +120,9 @@ def test_project_imports() -> None:
     assert HelpAction is not None
     assert HideAction is not None
     assert ImprovisedAction is not None
+    assert InitiativeCheckResult is not None
+    assert InitiativeResult is not None
+    assert InitiativeRoll is not None
     assert EncounterGenerator is not None
     assert Ability is not None
     assert MoveAction is not None
@@ -124,6 +140,8 @@ def test_project_imports() -> None:
     assert Position is not None
     assert calculate_combat_reward is not None
     assert create_test_encounter is not None
+    assert roll_initiative_check is not None
+    assert roll_initiative_order is not None
     assert opposing_team is not None
     assert reset_turn_resources is not None
     assert snapshot_combat_state is not None
@@ -132,6 +150,12 @@ def test_project_imports() -> None:
     assert CombatConfig is not None
     assert PPOConfig is not None
     assert TrainingConfig is not None
+    assert DEFAULT_RULESET_NAME is not None
+    assert Ruleset is not None
+    assert RulesetRegistry is not None
+    assert get_active_ruleset is not None
+    assert get_unsupported_reason is not None
+    assert is_supported_content is not None
     assert EpisodeStats is not None
     assert PPOTrainer is not None
     assert RolloutBuffer is not None

@@ -43,14 +43,23 @@ from combat.actions import (
 from combat.checks import (
     AbilityCheckResult,
     ContestedCheckResult,
+    InitiativeCheckResult,
     passive_perception,
     roll_ability_check,
     roll_contested_check,
     roll_d20,
+    roll_initiative_check,
 )
 from combat.class_features import ClassFeature, Resource, reset_resources
 from combat.environment import CombatEnvironment
 from combat.encounter_generator import EncounterGenerator
+from combat.initiative import (
+    InitiativeResult,
+    InitiativeRoll,
+    apply_fixed_turn_order,
+    apply_initiative_result,
+    roll_initiative_order,
+)
 from combat.map import GridMap
 from combat.models import (
     Character,
@@ -124,6 +133,9 @@ __all__ = [
     "HelpAction",
     "HideAction",
     "ImprovisedAction",
+    "InitiativeCheckResult",
+    "InitiativeResult",
+    "InitiativeRoll",
     "MoveAction",
     "OpportunityAttackAction",
     "Orc",
@@ -136,6 +148,8 @@ __all__ = [
     "StabilizeAction",
     "UseObjectAction",
     "ability_modifier",
+    "apply_fixed_turn_order",
+    "apply_initiative_result",
     "calculate_combat_reward",
     "create_test_encounter",
     "opposing_team",
@@ -143,6 +157,8 @@ __all__ = [
     "roll_ability_check",
     "roll_contested_check",
     "roll_d20",
+    "roll_initiative_check",
+    "roll_initiative_order",
     "reset_turn_resources",
     "reset_resources",
     "SpellAbility",

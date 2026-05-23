@@ -27,6 +27,11 @@ from combat.actions import (
     StabilizeAction,
     UseObjectAction,
 )
+from combat.initiative import (
+    apply_fixed_turn_order,
+    apply_initiative_result,
+    roll_initiative_order,
+)
 from combat.map import GridMap
 from combat.models import (
     Character,
@@ -51,16 +56,22 @@ class CombatEnvironment:
         self,
         characters: Sequence[Character] | None = None,
         grid_map: GridMap | None = None,
-        use_initiative: bool = False,
+        use_initiative: bool = True,
+        initiative_seed: int | None = None,
+        seed: int | None = None,
         log_to_console: bool = True,
         reward_config: RewardConfig | None = None,
     ) -> None:
         self._initial_characters = list(characters) if characters is not None else None
         self._initial_grid_map = grid_map
         self.use_initiative = use_initiative
+        self.initiative_seed = initiative_seed if initiative_seed is not None else seed
         self.log_to_console = log_to_console
         self.reward_config = reward_config or RewardConfig()
         self.combat_state = CombatState()
+        self.initiative_order: list[int] = []
+        self.current_turn_index = 0
+        self.round_number = 1
         self.action_log: list[str] = []
         self.reset()
 
@@ -69,16 +80,17 @@ class CombatEnvironment:
         if characters is None:
             characters = self._default_characters()
 
-        if self.use_initiative:
-            characters.sort(key=lambda character: character.stats.dex, reverse=True)
-
         grid_map = copy.deepcopy(self._initial_grid_map) or GridMap(width=5, height=5)
         self.combat_state = CombatState(characters=characters, grid_map=grid_map)
         self.combat_state.reset_combat_resources()
         self.action_log = []
-        self._skip_dead_active_actor()
+        self._initialize_turn_order()
+        self._sync_turn_metadata()
+        self._skip_unavailable_active_actor()
         if not self.is_done():
             self._begin_active_turn()
+            self._record_round_start()
+            self._record_active_actor()
         return self.combat_state
 
     def step(self, action: CombatAction) -> ActionResult:
@@ -87,13 +99,13 @@ class CombatEnvironment:
                 ActionResult(False, f"Combat is already done. Winner: {self.get_winner()}.")
             )
 
-        self._skip_dead_active_actor()
+        self._skip_unavailable_active_actor()
         if self.is_done():
             return self._record_result(
                 ActionResult(False, f"Combat is done. Winner: {self.get_winner()}.")
             )
 
-        active_actor_id = self.combat_state.turn_index % len(self.combat_state.characters)
+        active_actor_id = self._active_actor_id()
         active_actor = self.combat_state.characters[active_actor_id]
         reward_before = snapshot_combat_state(self.combat_state)
         if action.actor_id != active_actor_id:
@@ -121,25 +133,29 @@ class CombatEnvironment:
                 action,
             )
 
+        before_round = self.combat_state.round_number
         if isinstance(action, EndTurnAction):
             result = self._end_active_turn(action.actor_id)
         else:
             result = action.execute(self.combat_state)
         self._record_result(result)
+        if isinstance(action, EndTurnAction) and result.success:
+            self._record_turn_transition(before_round)
         if not isinstance(action, EndTurnAction) and result.success:
             self._auto_end_turn_if_actor_has_no_actions(action.actor_id)
         if result.success and self.is_done():
             self.combat_state.reset_combat_resources()
+        self._sync_turn_metadata()
         return self._with_reward(result, reward_before, active_actor.team, action)
 
     def get_observation(self, actor_id: int) -> dict[str, object]:
         actor = self.combat_state.character_at(actor_id)
         return {
             "actor_id": actor_id,
-            "active_actor_id": self.combat_state.turn_index
-            if self.combat_state.characters
-            else None,
-            "round_number": self.combat_state.round_number,
+            "active_actor_id": self.combat_state.active_actor_id,
+            "initiative_order": list(self.initiative_order),
+            "current_turn_index": self.current_turn_index,
+            "round_number": self.round_number,
             "is_done": self.is_done(),
             "winner": self.get_winner().value if self.get_winner() is not None else None,
             "actor": self._character_observation(actor) if actor is not None else None,
@@ -157,7 +173,7 @@ class CombatEnvironment:
         actor = self.combat_state.character_at(actor_id)
         if (
             actor is None
-            or actor.is_dead
+            or not actor.can_take_turn
             or self.is_done()
             or not self._is_active_actor(actor_id)
         ):
@@ -284,38 +300,47 @@ class CombatEnvironment:
             if not isinstance(action, EndTurnAction)
         ]
         if not non_end_turn_actions:
+            before_round = self.combat_state.round_number
             result = self._end_active_turn(actor_id)
             if result.success:
                 self._record_result(result)
+                self._record_turn_transition(before_round)
 
-    def _skip_dead_active_actor(self) -> None:
+    def _skip_unavailable_active_actor(self) -> None:
         while (
             self.combat_state.characters
             and not self.is_done()
             and self.combat_state.active_character is not None
-            and self.combat_state.active_character.is_dead
+            and not self.combat_state.active_character.can_take_turn
         ):
             skipped_actor = self.combat_state.active_character
+            before_round = self.combat_state.round_number
             next_actor = self.combat_state.advance_turn()
+            self._sync_turn_metadata()
             if next_actor is None:
                 return
+            reason = "dead" if skipped_actor.is_dead else "incapacitated"
             self._record_result(
                 ActionResult(
                     True,
-                    f"{skipped_actor.name} is dead and skips turn. {next_actor.name} starts turn.",
+                    (
+                        f"{skipped_actor.name} is {reason} and skips turn. "
+                        f"{next_actor.name} starts turn."
+                    ),
                 )
             )
+            self._record_skipped_turns(exclude={skipped_actor.name})
+            self._record_turn_transition(before_round)
 
     def _is_active_actor(self, actor_id: int) -> bool:
-        return (
-            bool(self.combat_state.characters)
-            and actor_id == self.combat_state.turn_index % len(self.combat_state.characters)
-        )
+        return actor_id == self.combat_state.active_actor_id
 
     def _begin_active_turn(self) -> Character | None:
         if not self.combat_state.characters:
             return None
-        actor_id = self.combat_state.turn_index % len(self.combat_state.characters)
+        actor_id = self.combat_state.active_actor_id
+        if actor_id is None:
+            return None
         return self.combat_state.reset_turn_resources(actor_id)
 
     def _end_active_turn(self, actor_id: int) -> ActionResult:
@@ -323,6 +348,59 @@ class CombatEnvironment:
         if not end_turn.is_valid(self.combat_state):
             return ActionResult(False, f"Actor {actor_id} cannot end turn.")
         return end_turn.execute(self.combat_state)
+
+    def _initialize_turn_order(self) -> None:
+        if self.use_initiative:
+            initiative = roll_initiative_order(
+                self.combat_state.characters,
+                seed=self.initiative_seed,
+            )
+            apply_initiative_result(self.combat_state, initiative)
+            for roll in initiative.rolls:
+                self._record_result(ActionResult(True, roll.log))
+            self._record_result(ActionResult(True, initiative.order_log))
+            return
+
+        apply_fixed_turn_order(self.combat_state)
+
+    def _active_actor_id(self) -> int:
+        actor_id = self.combat_state.active_actor_id
+        if actor_id is None:
+            raise ValueError("combat has no active actor")
+        return actor_id
+
+    def _sync_turn_metadata(self) -> None:
+        self.initiative_order = list(self.combat_state.initiative_order)
+        self.current_turn_index = self.combat_state.current_turn_index
+        self.round_number = self.combat_state.round_number
+
+    def _record_turn_transition(self, before_round: int) -> None:
+        self._record_skipped_turns()
+        if self.combat_state.round_number != before_round:
+            self._record_round_start()
+        self._record_active_actor()
+        self._sync_turn_metadata()
+
+    def _record_round_start(self) -> None:
+        self._record_result(
+            ActionResult(True, f"Round {self.combat_state.round_number} begins.")
+        )
+
+    def _record_active_actor(self) -> None:
+        actor = self.combat_state.active_character
+        if actor is not None:
+            self._record_result(ActionResult(True, f"Active actor: {actor.name}."))
+
+    def _record_skipped_turns(self, exclude: set[str] | None = None) -> None:
+        excluded_names = exclude or set()
+        for actor_id in self.combat_state.skipped_turn_actor_ids:
+            actor = self.combat_state.character_at(actor_id)
+            if actor is None or actor.name in excluded_names:
+                continue
+            reason = "dead" if actor.is_dead else "incapacitated"
+            self._record_result(
+                ActionResult(True, f"{actor.name} is {reason} and skips turn.")
+            )
 
     def _record_result(self, result: ActionResult) -> ActionResult:
         self.action_log.append(result.description)

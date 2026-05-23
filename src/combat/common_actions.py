@@ -118,7 +118,7 @@ class AttackAction(CombatAction):
         if actor is None or target is None or weapon is None:
             return False
         if (
-            actor.is_dead
+            not actor.can_take_turn
             or target.is_dead
             or COMMON_ACTION_ATTACK not in actor.common_actions
             or not weapon.available
@@ -203,7 +203,7 @@ class OpportunityAttackAction(CombatAction):
         if actor is None or target is None or weapon is None:
             return False
         if (
-            actor.is_dead
+            not actor.can_take_turn
             or target.is_dead
             or target.team == actor.team
             or target.disengaged_until_end_of_turn
@@ -285,7 +285,7 @@ class CastSpellAction(CombatAction):
     def is_valid(self, combat_state: CombatState) -> bool:
         actor = _get_character(combat_state, self.actor_id)
         spell = self._resolve_spell(actor)
-        if actor is None or actor.is_dead or spell is None:
+        if actor is None or not actor.can_take_turn or spell is None:
             return False
         if COMMON_ACTION_CAST_SPELL not in actor.common_actions:
             return False
@@ -766,7 +766,7 @@ class EndTurnAction(CombatAction):
         actor = _get_character(combat_state, self.actor_id)
         return (
             actor is not None
-            and actor.is_alive
+            and actor.can_take_turn
             and bool(combat_state.characters)
             and COMMON_ACTION_END_TURN in actor.common_actions
         )
@@ -813,7 +813,7 @@ def _can_spend_action(
     actor = _get_character(combat_state, actor_id)
     return (
         actor is not None
-        and actor.is_alive
+        and actor.can_take_turn
         and action_name in actor.common_actions
         and actor.action_economy.action_available
     )

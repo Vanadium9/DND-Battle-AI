@@ -40,6 +40,7 @@ def test_environment_reset_and_observation() -> None:
     environment = CombatEnvironment(
         characters=[hero, target],
         grid_map=GridMap(width=4, height=4),
+        use_initiative=False,
         log_to_console=False,
     )
 
@@ -60,6 +61,7 @@ def test_environment_allows_move_and_attack_in_one_turn() -> None:
     environment = CombatEnvironment(
         characters=[hero, target],
         grid_map=GridMap(width=4, height=4),
+        use_initiative=False,
         log_to_console=False,
     )
 
@@ -87,6 +89,7 @@ def test_environment_rejects_second_attack_without_action() -> None:
     environment = CombatEnvironment(
         characters=[hero, target],
         grid_map=GridMap(width=4, height=4),
+        use_initiative=False,
         log_to_console=False,
     )
 
@@ -105,6 +108,7 @@ def test_environment_end_turn_skips_dead_creature() -> None:
     environment = CombatEnvironment(
         characters=[hero, dead_enemy, living_enemy],
         grid_map=GridMap(width=4, height=4),
+        use_initiative=False,
         log_to_console=False,
     )
 
@@ -123,6 +127,7 @@ def test_environment_done_and_winner_when_one_team_dead() -> None:
     environment = CombatEnvironment(
         characters=[hero, target],
         grid_map=GridMap(width=4, height=4),
+        use_initiative=False,
         log_to_console=False,
     )
 
@@ -141,6 +146,7 @@ def test_available_actions_include_end_turn_and_respect_action_economy() -> None
     environment = CombatEnvironment(
         characters=[hero, target],
         grid_map=GridMap(width=4, height=4),
+        use_initiative=False,
         log_to_console=False,
     )
 

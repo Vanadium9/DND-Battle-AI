@@ -94,6 +94,7 @@ def test_environment_ends_combat_when_last_enemy_dies() -> None:
     environment = CombatEnvironment(
         characters=[hero, enemy],
         grid_map=GridMap(width=4, height=4),
+        use_initiative=False,
         log_to_console=False,
     )
 

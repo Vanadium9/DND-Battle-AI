@@ -74,7 +74,7 @@ class EncounterGenerator:
 
     def generate_environment(
         self,
-        use_initiative: bool = False,
+        use_initiative: bool = True,
         log_to_console: bool = True,
     ) -> CombatEnvironment:
         combat_state = self.generate_state()
@@ -82,13 +82,14 @@ class EncounterGenerator:
             characters=combat_state.characters,
             grid_map=combat_state.grid_map,
             use_initiative=use_initiative,
+            initiative_seed=self.seed,
             log_to_console=log_to_console,
         )
 
     def generate(
         self,
         as_environment: bool = False,
-        use_initiative: bool = False,
+        use_initiative: bool = True,
         log_to_console: bool = True,
     ) -> CombatState | CombatEnvironment:
         if as_environment:

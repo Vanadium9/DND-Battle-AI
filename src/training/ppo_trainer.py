@@ -381,9 +381,10 @@ class PPOTrainer:
 
     def _active_actor_id(self) -> int:
         state = self.environment.combat_state
-        if not state.characters:
+        actor_id = state.active_actor_id
+        if actor_id is None:
             raise ValueError("environment has no characters")
-        return state.turn_index % len(state.characters)
+        return actor_id
 
     def _padded_masks(self, masks: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         return {
