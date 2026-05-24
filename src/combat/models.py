@@ -94,6 +94,8 @@ class Character:
         ]
     )
     class_features: list[ClassFeature] = field(default_factory=list)
+    feats: list[object] = field(default_factory=list)
+    ability_score_improvements: list[object] = field(default_factory=list)
     resources: dict[str, Resource] = field(default_factory=dict)
     abilities: list[Ability] = field(default_factory=list)
     conditions: list[Condition] = field(default_factory=list)
@@ -103,6 +105,7 @@ class Character:
     def __post_init__(self) -> None:
         self._migrate_legacy_weapon_abilities()
         self._sync_legacy_abilities()
+        self._ensure_progression_features()
         self._ensure_feature_resources()
         reset_turn_resources(self)
 
@@ -281,14 +284,40 @@ class Character:
                 self.abilities.append(weapon)
 
     def _ensure_feature_resources(self) -> None:
+        from combat.class_features import feature_resource_name
+
         for feature in self.class_features:
-            if feature.resource_name is None:
+            resource_name = feature_resource_name(feature)
+            if resource_name is None:
                 continue
-            if feature.resource_name not in self.resources:
-                self.resources[feature.resource_name] = Resource(
-                    name=feature.resource_name,
+            if resource_name not in self.resources:
+                self.resources[resource_name] = Resource(
+                    name=resource_name,
                     max_uses=1,
                 )
+
+    def _ensure_progression_features(self) -> None:
+        if self.class_name is None or self.class_features:
+            return
+
+        from rules.progression import (
+            build_class_features,
+            build_class_resources,
+            is_spellcaster,
+            spell_slots_for_level,
+        )
+
+        self.class_features = build_class_features(
+            self.class_name,
+            self.level,
+            self.subclass_name,
+        )
+        self.resources = build_class_resources(self.class_features, self.resources)
+        if is_spellcaster(self):
+            spell_slots = spell_slots_for_level(self.level)
+            self.spellcasting = True
+            self.spell_slots = dict(spell_slots)
+            self.spell_slots_remaining = dict(spell_slots)
 
 
 @dataclass

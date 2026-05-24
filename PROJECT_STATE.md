@@ -833,3 +833,197 @@ Action masks должны учитывать:
 - race bonuses применяются
 - speed берётся из race или character override
 - resistance от race работает в damage system.
+
+
+29.
+Добавь систему ASI и черт персонажа.
+
+Файлы:
+- src/rules/feats.py
+- src/combat/features.py
+- src/character/schema.py
+
+Требования:
+- Character должен иметь:
+  - feats: list
+  - ability_score_improvements: list
+- на 4 уровне класс может получить ASI или feat
+- реализовать универсальную структуру FeatDefinition:
+  - name
+  - prerequisites
+  - stat_bonuses
+  - passive_effects
+  - active_effects
+  - combat_hooks
+  - implemented: bool
+
+Реализовать ASI:
+- +2 к одной характеристике
+- или +1 к двум характеристикам
+
+Для MVP реализовать:
+- Ability Score Improvement
+- Grappler, если он уже есть в ruleset config
+- остальные feats пока не реализовывать
+
+Добавить hooks:
+- on_attack_roll
+- on_damage_roll
+- on_saving_throw
+- on_ability_check
+- on_turn_start
+- on_turn_end
+
+Важно:
+- character builder должен показывать только поддержанные feats
+- unsupported feats не должны попадать в персонажа через UI/CLI
+- если feat не implemented, он не должен влиять на бой и не должен попадать в action masks
+
+Добавь тесты:
+- ASI меняет stats
+- ASI не позволяет поднять характеристику выше допустимого лимита, если такой лимит задан
+- feat prerequisites проверяются
+- неimplemented feat не влияет на combat hooks
+
+
+30.
+Переработай классовую систему в data-driven формат.
+
+Файлы:
+- src/rules/classes.py
+- src/rules/subclasses.py
+- src/combat/class_features.py
+- src/combat/character_builder.py
+
+Цель:
+классы не должны быть набором случайно добавленных действий.
+Они должны определяться через progression table по уровням 1-5.
+
+Реализуй:
+- ClassDefinition:
+  - name
+  - hit_die
+  - primary_abilities
+  - saving_throw_proficiencies
+  - armor_proficiencies
+  - weapon_proficiencies
+  - skill_choices
+  - level_features
+  - spellcasting_progression optional
+  - subclass_level
+- SubclassDefinition:
+  - name
+  - parent_class
+  - level_features
+- FeatureDefinition:
+  - name
+  - level
+  - action_cost optional
+  - resource_cost optional
+  - passive_hooks
+  - active_action optional
+  - description
+  - implemented: bool
+
+Требования:
+- при создании персонажа class features должны выдаваться по уровню
+- subclass выбирается на нужном уровне класса
+- unsupported class features должны сохраняться как not_implemented внутри правил, но не должны попадать в action mask
+- character builder должен разрешать выбирать только поддержанные классы и подклассы из ruleset registry
+- action masks должны учитывать только implemented features
+- observation должен получать признаки доступных implemented features
+
+Добавь тесты:
+- Fighter level 1 получает только features 1 уровня
+- Fighter level 3 получает subclass features
+- Wizard level 5 получает доступ к class features до 5 уровня
+- unsupported feature не попадает в action mask
+
+
+31.
+Расширь систему карты.
+
+Файлы:
+- src/combat/map.py
+- src/combat/terrain.py
+- src/combat/line_of_sight.py
+- src/combat/cover.py
+- src/agents/action_space.py
+- src/agents/observation.py
+
+Цель:
+реализовать базовые механики карты, которых сейчас нет:
+- obstacles
+- cover
+- terrain cost
+- полноценная line-of-sight модель
+
+Реализуй типы клеток:
+- NORMAL
+- DIFFICULT_TERRAIN
+- BLOCKED
+- LOW_COVER
+- HIGH_COVER
+
+GridMap должен поддерживать:
+- width
+- height
+- terrain grid
+- проверку walkable / blocked
+- movement cost для клетки
+- neighbors с учётом terrain cost
+- поиск достижимых клеток с учётом movement_remaining и difficult terrain
+- проверку occupied cell
+
+Movement:
+- NORMAL стоит 1 movement unit
+- DIFFICULT_TERRAIN стоит 2 movement units
+- BLOCKED недоступен
+- occupied клетка недоступна для завершения движения
+
+Line of sight:
+- реализовать line_of_sight(start, end)
+- использовать алгоритм Bresenham или аналогичный grid raycast
+- BLOCKED и HIGH_COVER блокируют line of sight
+- LOW_COVER не блокирует line of sight
+
+Cover:
+- реализовать get_cover_between(attacker_pos, target_pos)
+- варианты:
+  - NO_COVER
+  - HALF_COVER
+  - THREE_QUARTERS_COVER
+  - FULL_COVER
+- FULL_COVER запрещает ranged attack и большинство targeted spells
+- HALF_COVER даёт +2 AC и +2 DEX saves
+- THREE_QUARTERS_COVER даёт +5 AC и +5 DEX saves
+- cover должен учитываться в AttackAction и saving throws от AoE/заклинаний
+
+Обнови действия:
+- MoveAction учитывает terrain cost
+- AttackAction проверяет line of sight для ranged attacks
+- CastSpell проверяет line of sight для targeted spells
+- Hide может требовать cover или blocked line of sight
+- Search может обнаруживать hidden target
+
+Обнови action masks:
+- нельзя двигаться в BLOCKED
+- нельзя выбрать недостижимую клетку
+- нельзя ranged attack по цели за FULL_COVER
+- нельзя targeted spell без line of sight
+- Hide доступен только при наличии укрытия или отсутствия видимости врагов
+
+Обнови observation:
+- terrain type вокруг актёра
+- наличие cover относительно ближайших врагов
+- line of sight до целей
+- movement cost до доступных клеток
+
+Добавь тесты:
+- BLOCKED клетка недоступна для движения
+- DIFFICULT_TERRAIN тратит больше movement
+- line_of_sight блокируется препятствием
+- LOW_COVER не блокирует line of sight
+- FULL_COVER запрещает ranged attack
+- HALF_COVER добавляет AC bonus
+- Hide маскируется без укрытия

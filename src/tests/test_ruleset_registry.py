@@ -15,6 +15,7 @@ def test_default_ruleset_loads_minimal_srd5e_surface() -> None:
     assert ruleset.supported_subclasses["Fighter"] == ("Champion",)
     assert ruleset.supported_races == ("Human", "Dwarf", "Elf", "Halfling")
     assert ruleset.supported_spell_levels == (0, 1, 2, 3)
+    assert ruleset.supported_feats == ("Ability Score Improvement",)
 
 
 def test_supported_content_checks_are_case_and_style_insensitive() -> None:
@@ -26,6 +27,7 @@ def test_supported_content_checks_are_case_and_style_insensitive() -> None:
     assert is_supported_content("common_action", "EndTurn")
     assert is_supported_content("level", "5")
     assert is_supported_content("spell_level", 3)
+    assert is_supported_content("feat", "ability-score-improvement")
     assert is_supported_content("supported_classes", "Wizard")
     assert is_supported_content("supported_spell_levels", "0")
 

@@ -11,12 +11,15 @@ from agents.action_space import (
 )
 from agents.base import BaseAgent
 from agents.observation import (
+    ACTOR_CLASS_FEATURE_SIZE,
     ACTOR_FEATURE_SIZE,
+    ACTOR_MAP_FEATURE_SIZE,
     BASE_CHARACTER_FEATURE_SIZE,
     CHARACTER_FEATURE_SIZE,
     MAX_NEARBY_CHARACTERS,
     OBSERVATION_SIZE,
     OTHER_CHARACTER_FEATURE_SIZE,
+    OTHER_MAP_FEATURE_SIZE,
     encode_observation,
 )
 from agents.ppo_model import (
@@ -29,7 +32,9 @@ from agents.random_agent import RandomAgent
 
 __all__ = [
     "ACTION_CATEGORY_COUNT",
+    "ACTOR_CLASS_FEATURE_SIZE",
     "ACTOR_FEATURE_SIZE",
+    "ACTOR_MAP_FEATURE_SIZE",
     "ActionCategory",
     "BaseAgent",
     "BASE_CHARACTER_FEATURE_SIZE",
@@ -43,6 +48,7 @@ __all__ = [
     "MainActionType",
     "OBSERVATION_SIZE",
     "OTHER_CHARACTER_FEATURE_SIZE",
+    "OTHER_MAP_FEATURE_SIZE",
     "PPOActorCritic",
     "RandomAgent",
     "build_action_masks",

@@ -17,6 +17,7 @@ from combat import (
     StabilizeAction,
     Stats,
     Team,
+    TerrainType,
 )
 
 
@@ -153,7 +154,19 @@ def test_grapple_shove_and_stabilize_use_action_economy(monkeypatch) -> None:
 def test_hide_can_use_passive_perception_dc(monkeypatch) -> None:
     hero = make_character("Hero", Position(0, 0), Team.PLAYERS, stats=Stats(dex=10))
     enemy = make_character("Observer", Position(1, 0), Team.ENEMIES, stats=Stats(wis=18))
-    state = CombatState(characters=[hero, enemy], grid_map=GridMap(width=4, height=4))
+    state = CombatState(
+        characters=[hero, enemy],
+        grid_map=GridMap(
+            width=4,
+            height=4,
+            terrain_grid=[
+                [TerrainType.LOW_COVER, TerrainType.NORMAL, TerrainType.NORMAL, TerrainType.NORMAL],
+                [TerrainType.NORMAL, TerrainType.NORMAL, TerrainType.NORMAL, TerrainType.NORMAL],
+                [TerrainType.NORMAL, TerrainType.NORMAL, TerrainType.NORMAL, TerrainType.NORMAL],
+                [TerrainType.NORMAL, TerrainType.NORMAL, TerrainType.NORMAL, TerrainType.NORMAL],
+            ],
+        ),
+    )
     monkeypatch.setattr("combat.common_actions.random.randint", lambda _low, _high: 10)
 
     result = HideAction(actor_id=0, dc=None, observer_id=1).execute(state)
@@ -169,7 +182,16 @@ def test_action_masks_include_common_action_resources() -> None:
     enemy = make_character("Enemy", Position(1, 0), Team.ENEMIES)
     state = CombatState(
         characters=[hero, ally, enemy],
-        grid_map=GridMap(width=4, height=4),
+        grid_map=GridMap(
+            width=4,
+            height=4,
+            terrain_grid=[
+                [TerrainType.LOW_COVER, TerrainType.NORMAL, TerrainType.NORMAL, TerrainType.NORMAL],
+                [TerrainType.NORMAL, TerrainType.NORMAL, TerrainType.NORMAL, TerrainType.NORMAL],
+                [TerrainType.NORMAL, TerrainType.NORMAL, TerrainType.NORMAL, TerrainType.NORMAL],
+                [TerrainType.NORMAL, TerrainType.NORMAL, TerrainType.NORMAL, TerrainType.NORMAL],
+            ],
+        ),
     )
 
     masks = build_action_masks(state, actor_id=0)

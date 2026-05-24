@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
 
 from rules.progression import get_level_for_xp, get_proficiency_bonus
+from rules.feats import FeatDefinition, get_feat_definition
 from rules.races import get_race_definition
 
 
@@ -66,12 +69,71 @@ class CharacterRaceSchema:
 
 
 @dataclass(frozen=True)
+class CharacterFeatSchema:
+    """Feat metadata exposed to importer/exporter and builder code."""
+
+    name: str
+    prerequisites: dict[str, Any]
+    stat_bonuses: dict[str, int]
+    passive_effects: tuple[str, ...]
+    active_effects: tuple[str, ...]
+    combat_hooks: dict[str, tuple[str, ...]]
+    implemented: bool = False
+
+    @classmethod
+    def from_value(cls, feat: object) -> "CharacterFeatSchema":
+        definition = _coerce_feat_definition(feat)
+        if definition is not None:
+            return cls(
+                name=definition.name,
+                prerequisites=dict(definition.prerequisites),
+                stat_bonuses=dict(definition.stat_bonuses),
+                passive_effects=tuple(definition.passive_effects),
+                active_effects=tuple(definition.active_effects),
+                combat_hooks={
+                    hook_name: tuple(effect_names)
+                    for hook_name, effect_names in definition.combat_hooks.items()
+                },
+                implemented=definition.implemented,
+            )
+        return cls(
+            name=str(getattr(feat, "name", feat)),
+            prerequisites={},
+            stat_bonuses={},
+            passive_effects=(),
+            active_effects=(),
+            combat_hooks={},
+            implemented=False,
+        )
+
+
+@dataclass(frozen=True)
+class AbilityScoreImprovementSchema:
+    """Serialized ASI selection."""
+
+    bonuses: dict[str, int]
+    source: str = "Ability Score Improvement"
+
+    @classmethod
+    def from_value(cls, asi: object) -> "AbilityScoreImprovementSchema":
+        bonuses = getattr(asi, "bonuses", asi)
+        if not isinstance(bonuses, Mapping):
+            bonuses = {}
+        return cls(
+            bonuses={str(ability): int(value) for ability, value in bonuses.items()},
+            source=str(getattr(asi, "source", "Ability Score Improvement")),
+        )
+
+
+@dataclass(frozen=True)
 class CharacterSchema:
     """Minimal character schema used by importer-facing code."""
 
     name: str
     progression: CharacterProgressionSchema = CharacterProgressionSchema()
     race: CharacterRaceSchema = CharacterRaceSchema()
+    feats: tuple[CharacterFeatSchema, ...] = ()
+    ability_score_improvements: tuple[AbilityScoreImprovementSchema, ...] = ()
 
     @classmethod
     def from_character(cls, character: object) -> "CharacterSchema":
@@ -107,4 +169,23 @@ class CharacterSchema:
                 ),
                 special_traits=tuple(getattr(race_traits, "special_traits", ())),
             ),
+            feats=tuple(
+                CharacterFeatSchema.from_value(feat)
+                for feat in getattr(character, "feats", ())
+            ),
+            ability_score_improvements=tuple(
+                AbilityScoreImprovementSchema.from_value(asi)
+                for asi in getattr(character, "ability_score_improvements", ())
+            ),
         )
+
+
+def _coerce_feat_definition(feat: object) -> FeatDefinition | None:
+    if isinstance(feat, FeatDefinition):
+        return feat
+    if isinstance(feat, str):
+        return get_feat_definition(feat)
+    name = getattr(feat, "name", None)
+    if isinstance(name, str):
+        return get_feat_definition(name)
+    return None

@@ -18,6 +18,7 @@ from combat import (
     GridMap,
     Orc,
     Position,
+    TerrainType,
 )
 
 
@@ -82,7 +83,14 @@ def test_encode_observation_returns_fixed_tensor_for_actor() -> None:
     orc = Orc(Position(5, 5))
     state = CombatState(
         characters=[actor, ally, goblin, orc],
-        grid_map=GridMap(width=8, height=8),
+        grid_map=GridMap(
+            width=8,
+            height=8,
+            terrain_grid=[
+                [TerrainType.LOW_COVER, *([TerrainType.NORMAL] * 7)],
+                *([[TerrainType.NORMAL] * 8] * 7),
+            ],
+        ),
     )
 
     observation = encode_observation(state, actor_id=0)

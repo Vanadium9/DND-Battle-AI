@@ -32,6 +32,8 @@ supported_common_actions:
   - Stabilize
   - EndTurn
 supported_spell_levels: 0-3
+supported_feats:
+  - Ability Score Improvement
 supported_content_policy:
   unsupported_classes: unsupported classes are rejected during import
   unsupported_spells: unsupported spells are marked as unavailable

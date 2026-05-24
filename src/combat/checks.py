@@ -188,7 +188,7 @@ def roll_ability_check(
     proficiency_bonus = character.proficiency_bonus if proficiency else 0
     total = kept_roll + stat_modifier + proficiency_bonus
 
-    return AbilityCheckResult(
+    result = AbilityCheckResult(
         character_name=character.name,
         check_name=_display_check_name(ability_key),
         ability=ability_name,
@@ -199,6 +199,9 @@ def roll_ability_check(
         total=total,
         advantage_state=normalized_advantage,
     )
+    from combat.features import on_ability_check
+
+    return on_ability_check(character, result, ability=ability_key)
 
 
 def roll_contested_check(

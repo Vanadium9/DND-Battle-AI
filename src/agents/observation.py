@@ -18,13 +18,28 @@ from combat.common_actions import (
     COMMON_ACTION_HIDE,
     COMMON_ACTION_SHOVE,
 )
+from combat.class_features import (
+    available_implemented_class_features,
+    implemented_class_features,
+    implemented_feature_active_actions,
+)
+from combat.cover import CoverType
 from combat.models import Character, CombatState, Position, Team
+from combat.terrain import TerrainType
 
 
 MAX_NEARBY_CHARACTERS = 4
 BASE_CHARACTER_FEATURE_SIZE = 20
-ACTOR_FEATURE_SIZE = BASE_CHARACTER_FEATURE_SIZE + 18
-OTHER_CHARACTER_FEATURE_SIZE = BASE_CHARACTER_FEATURE_SIZE + 9
+ACTOR_CLASS_FEATURE_SIZE = 6
+ACTOR_MAP_FEATURE_SIZE = 10
+OTHER_MAP_FEATURE_SIZE = 2
+ACTOR_FEATURE_SIZE = (
+    BASE_CHARACTER_FEATURE_SIZE
+    + 18
+    + ACTOR_MAP_FEATURE_SIZE
+    + ACTOR_CLASS_FEATURE_SIZE
+)
+OTHER_CHARACTER_FEATURE_SIZE = BASE_CHARACTER_FEATURE_SIZE + 9 + OTHER_MAP_FEATURE_SIZE
 CHARACTER_FEATURE_SIZE = OTHER_CHARACTER_FEATURE_SIZE
 OBSERVATION_SIZE = (
     ACTOR_FEATURE_SIZE
@@ -87,10 +102,32 @@ def _encode_actor(
         float(_can_dash(actor)),
         float(_can_disengage(actor)),
         float(_can_dodge(actor)),
-        float(_can_hide(actor)),
+        float(_can_hide(state, actor)),
         float(_can_help(state, actor_id, actor)),
         float(_can_grapple(state, actor_id, actor)),
         float(_can_shove(state, actor_id, actor)),
+        *_encode_actor_map_features(actor, state),
+        *_encode_actor_class_features(actor),
+    ]
+
+
+def _encode_actor_class_features(actor: Character) -> list[float]:
+    implemented_features = implemented_class_features(actor)
+    available_features = available_implemented_class_features(actor)
+    active_actions = implemented_feature_active_actions(actor)
+    available_active_actions = tuple(
+        action
+        for feature in available_features
+        if feature.active_action is not None
+        for action in (feature.active_action,)
+    )
+    return [
+        float(len(implemented_features)),
+        float(len(available_features)),
+        float(_has_implemented_feature(actor, "Spellcasting")),
+        float(_has_implemented_feature(actor, "Ability Score Improvement")),
+        float(bool(active_actions)),
+        float(bool(available_active_actions)),
     ]
 
 
@@ -125,6 +162,28 @@ def _encode_other_character(
         float(_can_help_against_target(state, actor, character)),
         float(_can_grapple_target(state, actor, character)),
         float(_can_shove_target(state, actor, character)),
+        _cover_value(_cover_between(state, actor.position, character.position)),
+        float(_has_line_of_sight(state, actor.position, character.position)),
+    ]
+
+
+def _encode_actor_map_features(actor: Character, state: CombatState) -> list[float]:
+    directions = (
+        Position(actor.position.x, actor.position.y - 1),
+        Position(actor.position.x + 1, actor.position.y),
+        Position(actor.position.x, actor.position.y + 1),
+        Position(actor.position.x - 1, actor.position.y),
+    )
+    terrain_values = [_terrain_value(state, position) for position in directions]
+    movement_costs = [_movement_cost_value(state, position) for position in directions]
+    reachable_costs = _reachable_movement_costs(state, actor)
+    positive_costs = [cost for position, cost in reachable_costs.items() if position != actor.position]
+    average_cost = sum(positive_costs) / len(positive_costs) if positive_costs else 0.0
+    return [
+        *terrain_values,
+        *movement_costs,
+        float(len(positive_costs)),
+        float(average_cost),
     ]
 
 
@@ -209,6 +268,14 @@ def _has_spells(character: Character) -> bool:
     return any(isinstance(ability, SpellAbility) for ability in character.abilities)
 
 
+def _has_implemented_feature(character: Character, feature_name: str) -> bool:
+    feature_key = _lookup_key(feature_name)
+    return any(
+        _lookup_key(feature.name) == feature_key
+        for feature in implemented_class_features(character)
+    )
+
+
 def _can_spend_action(actor: Character, action_name: str) -> bool:
     return (
         actor.can_take_turn
@@ -254,8 +321,21 @@ def _can_dodge(actor: Character) -> bool:
     )
 
 
-def _can_hide(actor: Character) -> bool:
-    return _can_spend_action(actor, COMMON_ACTION_HIDE) and not actor.hidden
+def _can_hide(state: CombatState, actor: Character) -> bool:
+    if not _can_spend_action(actor, COMMON_ACTION_HIDE) or actor.hidden:
+        return False
+    enemies = [
+        character
+        for character in state.characters
+        if character is not actor and character.team != actor.team and character.is_alive
+    ]
+    if not enemies:
+        return True
+    return all(
+        not _has_line_of_sight(state, enemy.position, actor.position)
+        or _cover_between(state, enemy.position, actor.position) is not CoverType.NO_COVER
+        for enemy in enemies
+    )
 
 
 def _can_help(state: CombatState, actor_id: int, actor: Character) -> bool:
@@ -307,6 +387,7 @@ def _is_valid_weapon_target(
         and weapon.available
         and _distance(actor.position, target.position, state) <= weapon.range
         and _has_line_of_sight(state, actor.position, target.position)
+        and _cover_between(state, actor.position, target.position) is not CoverType.FULL_COVER
     )
 
 
@@ -404,6 +485,7 @@ def _can_target_spell(
         and target.is_alive
         and _distance(actor.position, target.position, state) <= spell.range
         and _has_line_of_sight(state, actor.position, target.position)
+        and _cover_between(state, actor.position, target.position) is not CoverType.FULL_COVER
     )
 
 
@@ -446,3 +528,65 @@ def _has_line_of_sight(
         if callable(method):
             return bool(method(origin, target))
     return True
+
+
+def _cover_between(
+    state: CombatState,
+    origin: Position,
+    target: Position,
+) -> CoverType:
+    grid_map = state.grid_map
+    if grid_map is None:
+        return CoverType.NO_COVER
+    return grid_map.get_cover_between(origin, target)
+
+
+def _cover_value(cover: CoverType) -> float:
+    return float(
+        {
+            CoverType.NO_COVER: 0,
+            CoverType.HALF_COVER: 1,
+            CoverType.THREE_QUARTERS_COVER: 2,
+            CoverType.FULL_COVER: 3,
+        }[cover]
+    )
+
+
+def _terrain_value(state: CombatState, position: Position) -> float:
+    grid_map = state.grid_map
+    if grid_map is None or not grid_map.in_bounds(position):
+        return float(_terrain_index(TerrainType.BLOCKED))
+    return float(_terrain_index(grid_map.terrain_at(position)))
+
+
+def _movement_cost_value(state: CombatState, position: Position) -> float:
+    grid_map = state.grid_map
+    if grid_map is None or not grid_map.in_bounds(position):
+        return 0.0
+    movement_cost = grid_map.movement_cost(position)
+    return float(movement_cost or 0)
+
+
+def _reachable_movement_costs(state: CombatState, actor: Character) -> dict[Position, int]:
+    grid_map = state.grid_map
+    if grid_map is None:
+        return {}
+    return grid_map.movement_costs_from(
+        actor.position,
+        actor.action_economy.movement_remaining,
+        state.characters,
+    )
+
+
+def _terrain_index(terrain_type: TerrainType) -> int:
+    return {
+        TerrainType.NORMAL: 0,
+        TerrainType.DIFFICULT_TERRAIN: 1,
+        TerrainType.BLOCKED: 2,
+        TerrainType.LOW_COVER: 3,
+        TerrainType.HIGH_COVER: 4,
+    }[terrain_type]
+
+
+def _lookup_key(value: object) -> str:
+    return "".join(character for character in str(value).casefold() if character.isalnum())

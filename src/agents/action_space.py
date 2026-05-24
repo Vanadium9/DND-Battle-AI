@@ -42,6 +42,8 @@ from combat.actions import (
     StabilizeAction,
     UseObjectAction,
 )
+from combat.class_features import implemented_feature_active_actions
+from combat.cover import CoverType
 from combat.models import Character, CombatState, Position, SpellAbility, WeaponAttack
 
 
@@ -284,9 +286,7 @@ def _build_main_action_type_mask(
         and not actor.dodging_until_start_of_next_turn
     )
     main_action_type_mask[int(MainActionType.HELP)] = _can_help(state, actor_id, actor)
-    main_action_type_mask[int(MainActionType.HIDE)] = (
-        _can_spend_action(actor, COMMON_ACTION_HIDE) and not actor.hidden
-    )
+    main_action_type_mask[int(MainActionType.HIDE)] = _can_hide(state, actor)
     main_action_type_mask[int(MainActionType.SEARCH)] = _can_spend_action(
         actor,
         COMMON_ACTION_SEARCH,
@@ -503,6 +503,7 @@ def _is_valid_weapon_target(
     return (
         _distance(actor.position, target.position, state) <= weapon.range
         and _has_line_of_sight(state, actor.position, target.position)
+        and _cover_between(state, actor.position, target.position) is not CoverType.FULL_COVER
     )
 
 
@@ -620,6 +621,7 @@ def _can_target_spell(
         and target.is_alive
         and _distance(actor.position, target.position, state) <= spell.range
         and _has_line_of_sight(state, actor.position, target.position)
+        and _cover_between(state, actor.position, target.position) is not CoverType.FULL_COVER
     )
 
 
@@ -655,6 +657,23 @@ def _can_help(state: CombatState, actor_id: int, actor: Character) -> bool:
     return any(
         target_id != actor_id and not target.is_dead
         for target_id, target in enumerate(state.characters)
+    )
+
+
+def _can_hide(state: CombatState, actor: Character) -> bool:
+    if not _can_spend_action(actor, COMMON_ACTION_HIDE) or actor.hidden:
+        return False
+    enemies = [
+        character
+        for character in state.characters
+        if character is not actor and character.team != actor.team and character.is_alive
+    ]
+    if not enemies:
+        return True
+    return all(
+        not _has_line_of_sight(state, enemy.position, actor.position)
+        or _cover_between(state, enemy.position, actor.position) is not CoverType.NO_COVER
+        for enemy in enemies
     )
 
 
@@ -731,11 +750,15 @@ def _can_ready(actor: Character) -> bool:
 
 
 def _has_bonus_action(actor: Character) -> bool:
-    return actor.action_economy.bonus_action_available and False
+    return actor.action_economy.bonus_action_available and bool(
+        implemented_feature_active_actions(actor, "bonus_action")
+    )
 
 
 def _has_reaction(actor: Character) -> bool:
-    return actor.action_economy.reaction_available and False
+    return actor.action_economy.reaction_available and bool(
+        implemented_feature_active_actions(actor, "reaction")
+    )
 
 
 def _target_or_first_valid(
@@ -802,6 +825,17 @@ def _has_line_of_sight(
         if callable(method):
             return bool(method(origin, target))
     return True
+
+
+def _cover_between(
+    state: CombatState,
+    origin: Position,
+    target: Position,
+) -> CoverType:
+    grid_map = state.grid_map
+    if grid_map is None:
+        return CoverType.NO_COVER
+    return grid_map.get_cover_between(origin, target)
 
 
 def _validate_masked_index(

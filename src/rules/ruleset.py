@@ -18,6 +18,7 @@ class Ruleset:
     supported_common_actions: tuple[str, ...]
     supported_spell_levels: tuple[int, ...]
     supported_content_policy: dict[str, str]
+    supported_feats: tuple[str, ...] = ()
 
     @classmethod
     def from_mapping(cls, data: dict[str, Any]) -> "Ruleset":
@@ -43,6 +44,7 @@ class Ruleset:
                 str(key): str(value)
                 for key, value in data.get("supported_content_policy", {}).items()
             },
+            supported_feats=_coerce_str_tuple(data.get("supported_feats", ())),
         )
 
     def is_supported_content(self, content_type: str, name: str | int) -> bool:
@@ -63,6 +65,8 @@ class Ruleset:
             return _contains_name(self.supported_common_actions, name)
         if content_key == "spell_level":
             return _as_int(name) in self.supported_spell_levels
+        if content_key == "feat":
+            return _contains_name(self.supported_feats, name)
         if content_key in {"spell", "feature"}:
             return False
         return False
@@ -117,6 +121,11 @@ class Ruleset:
                 self.supported_content_policy,
                 "unsupported_spells",
                 f"Spell '{name}' is not explicitly supported by {self.ruleset_name}.",
+            )
+        if content_key == "feat":
+            return (
+                f"Feat '{name}' is not supported by {self.ruleset_name}. "
+                f"Supported feats: {_format_supported_names(self.supported_feats)}."
             )
         if content_key == "feature":
             return _policy_reason(
@@ -177,6 +186,8 @@ def _normalize_content_type(content_type: str) -> str:
         "common_actions": "common_action",
         "feature": "feature",
         "features": "feature",
+        "feat": "feat",
+        "feats": "feat",
         "level": "level",
         "levels": "level",
         "race": "race",
@@ -195,6 +206,8 @@ def _normalize_content_type(content_type: str) -> str:
         "supported_classes": "class",
         "supported_common_action": "common_action",
         "supported_common_actions": "common_action",
+        "supported_feat": "feat",
+        "supported_feats": "feat",
         "supported_level": "level",
         "supported_levels": "level",
         "supported_race": "race",
@@ -275,3 +288,9 @@ def _format_int_range(values: tuple[int, ...]) -> str:
     if sorted_values == list(range(sorted_values[0], sorted_values[-1] + 1)):
         return f"{sorted_values[0]}-{sorted_values[-1]}"
     return ", ".join(str(value) for value in sorted_values)
+
+
+def _format_supported_names(values: tuple[str, ...]) -> str:
+    if not values:
+        return "none"
+    return ", ".join(values)

@@ -36,8 +36,6 @@ FULL_CASTER_SPELL_SLOTS: dict[int, dict[int, int]] = {
     5: {1: 4, 2: 3, 3: 2},
 }
 
-SPELLCASTER_CLASSES = {"cleric", "wizard"}
-
 BASE_COMMON_ACTIONS: tuple[str, ...] = (
     "move",
     "attack",
@@ -140,17 +138,13 @@ def build_class_features(
 ) -> list[ClassFeature]:
     """Build class features available at a supported level."""
 
-    normalized_class = _normalized_class_name(class_name)
-    if normalized_class is None:
-        return []
+    from rules.classes import build_class_features as build_features_from_rules
 
-    normalized_level = _clamp_level(level)
-    definitions = _feature_definitions(normalized_class, subclass_name)
-    return [
-        feature
-        for feature in definitions
-        if feature.required_level <= normalized_level
-    ]
+    return build_features_from_rules(
+        _normalized_class_name(class_name),
+        _clamp_level(level),
+        subclass_name,
+    )
 
 
 def build_class_resources(
@@ -159,21 +153,22 @@ def build_class_resources(
 ) -> dict[str, Resource]:
     """Build resources required by the active class features."""
 
-    from combat.class_features import Resource
+    from combat.class_features import Resource, feature_resource_name
 
     existing_resources = existing_resources or {}
     resources: dict[str, Resource] = {}
     for feature in features:
-        if feature.resource_name is None:
+        resource_name = feature_resource_name(feature)
+        if resource_name is None:
             continue
-        max_uses = CLASS_RESOURCE_MAX_USES.get(feature.resource_name, 1)
-        existing = existing_resources.get(feature.resource_name)
+        max_uses = CLASS_RESOURCE_MAX_USES.get(resource_name, 1)
+        existing = existing_resources.get(resource_name)
         if existing is not None and existing.max_uses == max_uses:
-            resources[feature.resource_name] = existing
+            resources[resource_name] = existing
             existing.reset()
         else:
-            resources[feature.resource_name] = Resource(
-                name=feature.resource_name,
+            resources[resource_name] = Resource(
+                name=resource_name,
                 max_uses=max_uses,
             )
     return resources
@@ -183,7 +178,9 @@ def is_spellcaster(character: "Character") -> bool:
     """Return True if progression should maintain spell slots for this character."""
 
     class_name = _normalized_class_name(getattr(character, "class_name", None))
-    if class_name is not None and class_name.casefold() in SPELLCASTER_CLASSES:
+    from rules.classes import class_uses_spellcasting
+
+    if class_uses_spellcasting(class_name):
         return True
     return bool(getattr(character, "spellcasting", False))
 
@@ -191,153 +188,9 @@ def is_spellcaster(character: "Character") -> bool:
 def spell_slots_for_level(level: int) -> dict[int, int]:
     """Return simplified full-caster spell slots for levels 1-5."""
 
-    return dict(FULL_CASTER_SPELL_SLOTS[_clamp_level(level)])
+    from rules.classes import spell_slots_for_class_level
 
-
-def _feature_definitions(
-    class_name: str,
-    subclass_name: str | None,
-) -> list[ClassFeature]:
-    normalized_class = class_name.casefold()
-    normalized_subclass = (subclass_name or "").casefold()
-
-    if normalized_class == "fighter":
-        features = [
-            _class_feature(
-                name="Second Wind",
-                description="Recover hit points once per combat.",
-                resource_name="second_wind",
-                required_level=1,
-            ),
-            _class_feature(
-                name="Action Surge",
-                description="Class resource for taking an extra action.",
-                resource_name="action_surge",
-                required_level=2,
-            ),
-            _class_feature(
-                name="Ability Score Improvement",
-                description="Level 4 fighter progression note.",
-                required_level=4,
-            ),
-            _class_feature(
-                name="Extra Attack",
-                description="Level 5 fighter progression note.",
-                required_level=5,
-            ),
-        ]
-        if normalized_subclass == "champion":
-            features.append(
-                _class_feature(
-                    name="Improved Critical",
-                    description="Champion feature saved for future attack logic.",
-                    required_level=3,
-                )
-            )
-        return features
-
-    if normalized_class == "cleric":
-        features = [
-            _class_feature(
-                name="Spellcasting",
-                description="Cleric spellcasting progression.",
-                required_level=1,
-            ),
-            _class_feature(
-                name="Channel Divinity",
-                description="Cleric class resource.",
-                resource_name="channel_divinity",
-                required_level=2,
-            ),
-            _class_feature(
-                name="2nd-level Spells",
-                description="Cleric spell slot progression note.",
-                required_level=3,
-            ),
-            _class_feature(
-                name="Ability Score Improvement",
-                description="Level 4 cleric progression note.",
-                required_level=4,
-            ),
-            _class_feature(
-                name="3rd-level Spells",
-                description="Cleric spell slot progression note.",
-                required_level=5,
-            ),
-        ]
-        if normalized_subclass == "life domain":
-            features.append(
-                _class_feature(
-                    name="Disciple of Life",
-                    description="Life Domain feature note.",
-                    required_level=1,
-                )
-            )
-        return features
-
-    if normalized_class == "wizard":
-        features = [
-            _class_feature(
-                name="Spellcasting",
-                description="Wizard spellcasting progression.",
-                required_level=1,
-            ),
-            _class_feature(
-                name="Arcane Recovery",
-                description="Wizard class resource.",
-                resource_name="arcane_recovery",
-                required_level=1,
-            ),
-            _class_feature(
-                name="2nd-level Spells",
-                description="Wizard spell slot progression note.",
-                required_level=3,
-            ),
-            _class_feature(
-                name="Ability Score Improvement",
-                description="Level 4 wizard progression note.",
-                required_level=4,
-            ),
-            _class_feature(
-                name="3rd-level Spells",
-                description="Wizard spell slot progression note.",
-                required_level=5,
-            ),
-        ]
-        if normalized_subclass == "school of evocation":
-            features.extend(
-                [
-                    _class_feature(
-                        name="Evocation Savant",
-                        description="School of Evocation feature note.",
-                        required_level=2,
-                    ),
-                    _class_feature(
-                        name="Sculpt Spells",
-                        description="School of Evocation feature note.",
-                        required_level=2,
-                    ),
-                ]
-            )
-        return features
-
-    return []
-
-
-def _class_feature(
-    name: str,
-    description: str = "",
-    resource_name: str | None = None,
-    required_level: int = 1,
-) -> "ClassFeature":
-    from combat.class_features import ClassFeature
-
-    return ClassFeature(
-        name=name,
-        description=description,
-        resource_name=resource_name,
-        required_level=required_level,
-    )
+    return spell_slots_for_class_level("Wizard", _clamp_level(level))
 
 
 def _normalized_class_name(class_name: str | None) -> str | None:

@@ -13,6 +13,12 @@ from combat.checks import (
     roll_ability_check,
     roll_contested_check,
 )
+from combat.cover import CoverType, apply_cover_to_ac
+from combat.features import (
+    attack_roll_advantage_state,
+    on_attack_roll,
+    on_damage_roll,
+)
 from combat.models import Character, CombatState, Position
 from combat.race_traits import apply_damage_resistance, use_halfling_lucky
 
@@ -88,12 +94,13 @@ class MoveAction(CombatAction):
 
         previous_position = actor.position
         movement_cost = _movement_cost(actor, self.destination, combat_state)
+        path_cost = _movement_path_cost(actor, self.destination, combat_state)
+        if path_cost is None:
+            return ActionResult(False, f"{actor.name} cannot move to {self.destination}.")
         if actor.prone and not actor.action_economy.stand_up(actor.speed):
             return ActionResult(False, f"{actor.name} cannot stand up from prone.")
         actor.position = self.destination
-        actor.action_economy.spend_movement(
-            _distance(previous_position, self.destination, combat_state)
-        )
+        actor.action_economy.spend_movement(path_cost)
         return ActionResult(
             True,
             (
@@ -126,7 +133,9 @@ class AttackAction(CombatAction):
             or not actor.action_economy.action_available
         ):
             return False
-        return _distance(actor.position, target.position, combat_state) <= weapon.range
+        if _distance(actor.position, target.position, combat_state) > weapon.range:
+            return False
+        return _can_weapon_target_from_map(combat_state, actor, target, weapon)
 
     def execute(self, combat_state: CombatState) -> ActionResult:
         actor = _get_character(combat_state, self.actor_id)
@@ -151,19 +160,27 @@ class AttackAction(CombatAction):
         actor.action_economy.spend_action()
         d20_roll = _attack_roll(actor, target, combat_state)
         attack_modifier = weapon.attack_modifier(actor)
+        cover = _cover_between(combat_state, actor.position, target.position)
+        effective_ac = apply_cover_to_ac(target.ac, cover)
         attack_total = d20_roll + attack_modifier
-        if attack_total < target.ac:
+        if attack_total < effective_ac:
             return ActionResult(
                 True,
                 (
                     f"{actor.name} attacks {target.name} with {weapon.name}: "
-                    f"miss ({attack_total} vs AC {target.ac}; "
+                    f"miss ({attack_total} vs AC {effective_ac}; "
                     f"d20={d20_roll}, modifier={attack_modifier}). "
                     "Action spent: action_available=False."
                 ),
             )
 
-        raw_damage = max(0, _roll_damage(weapon.damage) + weapon.damage_modifier(actor))
+        raw_damage = on_damage_roll(
+            actor,
+            max(0, _roll_damage(weapon.damage) + weapon.damage_modifier(actor)),
+            target=target,
+            weapon=weapon,
+            combat_state=combat_state,
+        )
         damage = apply_damage_resistance(target, raw_damage, weapon.damage_type)
         target.hp = max(0, target.hp - damage)
         if target.hp > 0:
@@ -172,7 +189,7 @@ class AttackAction(CombatAction):
             True,
             (
                 f"{actor.name} attacks {target.name} with {weapon.name}: "
-                f"hit ({attack_total} vs AC {target.ac}; "
+                f"hit ({attack_total} vs AC {effective_ac}; "
                 f"d20={d20_roll}, modifier={attack_modifier}) for {damage} damage. "
                 "Action spent: action_available=False."
             ),
@@ -237,19 +254,27 @@ class OpportunityAttackAction(CombatAction):
         actor.action_economy.spend_reaction()
         d20_roll = _attack_roll(actor, target, combat_state)
         attack_modifier = weapon.attack_modifier(actor)
+        cover = _cover_between(combat_state, actor.position, target.position)
+        effective_ac = apply_cover_to_ac(target.ac, cover)
         attack_total = d20_roll + attack_modifier
-        if attack_total < target.ac:
+        if attack_total < effective_ac:
             return ActionResult(
                 True,
                 (
                     f"{actor.name} opportunity attacks {target.name} with {weapon.name}: "
-                    f"miss ({attack_total} vs AC {target.ac}; "
+                    f"miss ({attack_total} vs AC {effective_ac}; "
                     f"d20={d20_roll}, modifier={attack_modifier}). "
                     "Reaction spent: reaction_available=False."
                 ),
             )
 
-        raw_damage = max(0, _roll_damage(weapon.damage) + weapon.damage_modifier(actor))
+        raw_damage = on_damage_roll(
+            actor,
+            max(0, _roll_damage(weapon.damage) + weapon.damage_modifier(actor)),
+            target=target,
+            weapon=weapon,
+            combat_state=combat_state,
+        )
         damage = apply_damage_resistance(target, raw_damage, weapon.damage_type)
         target.hp = max(0, target.hp - damage)
         if target.hp > 0:
@@ -258,7 +283,7 @@ class OpportunityAttackAction(CombatAction):
             True,
             (
                 f"{actor.name} opportunity attacks {target.name} with {weapon.name}: "
-                f"hit ({attack_total} vs AC {target.ac}; "
+                f"hit ({attack_total} vs AC {effective_ac}; "
                 f"d20={d20_roll}, modifier={attack_modifier}) for {damage} damage. "
                 "Reaction spent: reaction_available=False."
             ),
@@ -309,9 +334,16 @@ class CastSpellAction(CombatAction):
         actor.action_economy.spend_action()
         target = self._target_for_spell(combat_state, actor, spell)
         if spell.damage is not None and target is not None:
+            raw_damage = on_damage_roll(
+                actor,
+                _roll_damage(spell.damage),
+                target=target,
+                spell=spell,
+                combat_state=combat_state,
+            )
             damage = apply_damage_resistance(
                 target,
-                _roll_damage(spell.damage),
+                raw_damage,
                 spell.damage_type,
             )
             target.hp = max(0, target.hp - damage)
@@ -475,7 +507,12 @@ class HideAction(CombatAction):
     observer_id: int | None = None
 
     def is_valid(self, combat_state: CombatState) -> bool:
-        return _can_spend_action(combat_state, self.actor_id, COMMON_ACTION_HIDE)
+        actor = _get_character(combat_state, self.actor_id)
+        return (
+            _can_spend_action(combat_state, self.actor_id, COMMON_ACTION_HIDE)
+            and actor is not None
+            and _can_hide_from_enemies(combat_state, actor)
+        )
 
     def execute(self, combat_state: CombatState) -> ActionResult:
         actor = _get_character(combat_state, self.actor_id)
@@ -545,11 +582,18 @@ class SearchAction(CombatAction):
         skill = "investigation" if self.skill.lower() == "investigation" else "perception"
         check = roll_ability_check(actor, skill, proficiency=True)
         outcome = "succeeds" if check.total >= self.dc else "fails"
+        discovered = _discover_hidden_targets(combat_state, actor, check.total)
+        discovered_text = (
+            f" Revealed hidden targets: {', '.join(discovered)}."
+            if discovered
+            else ""
+        )
         return ActionResult(
             True,
             (
                 f"{actor.name} Searches with {self.skill} and {outcome} "
                 f"({check.total} vs DC {self.dc}; {check.log}). "
+                f"{discovered_text}"
                 "Action spent: action_available=False."
             ),
         )
@@ -833,7 +877,12 @@ def _can_target_spell(
 ) -> bool:
     if target is actor or target.team == actor.team or target.hp <= 0:
         return False
-    return _distance(actor.position, target.position, combat_state) <= spell.range
+    return (
+        _distance(actor.position, target.position, combat_state) <= spell.range
+        and _has_line_of_sight(combat_state, actor.position, target.position)
+        and _cover_between(combat_state, actor.position, target.position)
+        is not CoverType.FULL_COVER
+    )
 
 
 def _is_valid_special_melee_attack(
@@ -862,15 +911,101 @@ def _distance(first: Position, second: Position, combat_state: CombatState) -> i
     return abs(first.x - second.x) + abs(first.y - second.y)
 
 
+def _cover_between(
+    combat_state: CombatState,
+    attacker_position: Position,
+    target_position: Position,
+) -> CoverType:
+    grid_map = combat_state.grid_map
+    if grid_map is None:
+        return CoverType.NO_COVER
+    return grid_map.get_cover_between(attacker_position, target_position)
+
+
+def _has_line_of_sight(
+    combat_state: CombatState,
+    origin: Position,
+    target: Position,
+) -> bool:
+    grid_map = combat_state.grid_map
+    if grid_map is None:
+        return True
+    return grid_map.line_of_sight(origin, target)
+
+
+def _can_weapon_target_from_map(
+    combat_state: CombatState,
+    actor: Character,
+    target: Character,
+    weapon: WeaponAttack,
+) -> bool:
+    if weapon.range <= 1:
+        return True
+    return (
+        _has_line_of_sight(combat_state, actor.position, target.position)
+        and _cover_between(combat_state, actor.position, target.position)
+        is not CoverType.FULL_COVER
+    )
+
+
 def _movement_cost(
     actor: Character,
     destination: Position,
     combat_state: CombatState,
 ) -> int:
-    distance = _distance(actor.position, destination, combat_state)
+    path_cost = _movement_path_cost(actor, destination, combat_state)
+    if path_cost is None:
+        return 10**9
     if actor.prone and destination != actor.position:
-        return distance + max(1, max(0, actor.speed) // 2)
-    return distance
+        return path_cost + max(1, max(0, actor.speed) // 2)
+    return path_cost
+
+
+def _movement_path_cost(
+    actor: Character,
+    destination: Position,
+    combat_state: CombatState,
+) -> int | None:
+    if combat_state.grid_map is not None:
+        return combat_state.grid_map.path_movement_cost(
+            actor.position,
+            destination,
+            combat_state.characters,
+        )
+    return _distance(actor.position, destination, combat_state)
+
+
+def _can_hide_from_enemies(combat_state: CombatState, actor: Character) -> bool:
+    enemies = [
+        character
+        for character in combat_state.characters
+        if character is not actor and character.team != actor.team and character.is_alive
+    ]
+    if not enemies:
+        return True
+    return all(
+        not _has_line_of_sight(combat_state, enemy.position, actor.position)
+        or _cover_between(combat_state, enemy.position, actor.position)
+        is not CoverType.NO_COVER
+        for enemy in enemies
+    )
+
+
+def _discover_hidden_targets(
+    combat_state: CombatState,
+    actor: Character,
+    check_total: int,
+) -> list[str]:
+    if check_total < 10:
+        return []
+    discovered: list[str] = []
+    for target in combat_state.characters:
+        if target is actor or target.team == actor.team or not target.hidden:
+            continue
+        if _has_line_of_sight(combat_state, actor.position, target.position):
+            target.hidden = False
+            discovered.append(target.name)
+    return discovered
 
 
 def _roll_damage(damage: int | str) -> int:
@@ -899,6 +1034,13 @@ def _attack_roll(
 ) -> int:
     has_advantage = actor.hidden or _consume_help_advantage(actor, target, combat_state)
     has_disadvantage = target.dodging_until_start_of_next_turn
+    has_advantage, has_disadvantage = attack_roll_advantage_state(
+        actor,
+        target,
+        combat_state,
+        has_advantage=has_advantage,
+        has_disadvantage=has_disadvantage,
+    )
     first_roll = _roll_d20_with_racial_traits(actor)
     if has_advantage == has_disadvantage:
         roll = first_roll
@@ -906,7 +1048,14 @@ def _attack_roll(
         second_roll = _roll_d20_with_racial_traits(actor)
         roll = max(first_roll, second_roll) if has_advantage else min(first_roll, second_roll)
     actor.hidden = False
-    return roll
+    return on_attack_roll(
+        actor,
+        roll,
+        target=target,
+        combat_state=combat_state,
+        has_advantage=has_advantage,
+        has_disadvantage=has_disadvantage,
+    )
 
 
 def _roll_d20_with_racial_traits(actor: Character) -> int:

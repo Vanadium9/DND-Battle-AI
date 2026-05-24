@@ -498,6 +498,25 @@ class CombatEnvironment:
             "weapons": [weapon.name for weapon in character.weapons],
             "common_actions": list(character.common_actions),
             "class_features": [feature.name for feature in character.class_features],
+            "implemented_class_features": [
+                feature.name
+                for feature in character.class_features
+                if getattr(feature, "implemented", False)
+            ],
+            "not_implemented_class_features": [
+                feature.name
+                for feature in character.class_features
+                if not getattr(feature, "implemented", False)
+            ],
+            "feats": [
+                getattr(feat, "name", str(feat))
+                for feat in getattr(character, "feats", ())
+            ],
+            "ability_score_improvements": [
+                dict(getattr(asi, "bonuses", asi))
+                for asi in getattr(character, "ability_score_improvements", ())
+                if isinstance(getattr(asi, "bonuses", asi), dict)
+            ],
             "resources": {
                 name: resource.uses_remaining
                 for name, resource in character.resources.items()
