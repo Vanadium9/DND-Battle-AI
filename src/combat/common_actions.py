@@ -41,7 +41,23 @@ from combat.features import (
     on_attack_roll,
     on_damage_roll,
 )
-from combat.items import CombatItem, resolve_item, supported_item_aoe_shape
+from combat.items import (
+    CombatItem,
+    consume_item,
+    item_damage,
+    item_damage_type,
+    item_has_quantity,
+    item_healing,
+    item_save_ability,
+    item_save_half_damage,
+    item_stabilizes,
+    normalize_action_cost,
+    normalize_target_type,
+    resolve_item,
+    supported_item_aoe_shape,
+    ItemActionCost,
+    ItemTargetType,
+)
 from combat.models import Character, CombatState, Condition, Position
 from combat.race_traits import use_halfling_lucky
 from combat.spellcasting import (
@@ -913,23 +929,27 @@ class UseObjectAction(CombatAction):
 
     object_name: str = "object"
     item: CombatItem | None = None
+    target_id: int | None = None
     target_cell: Position | None = None
     direction: AoEDirection | str | int | None = None
 
     def is_valid(self, combat_state: CombatState) -> bool:
         actor = _get_character(combat_state, self.actor_id)
-        if not _can_spend_action(combat_state, self.actor_id, COMMON_ACTION_USE_OBJECT):
-            return False
         if actor is None:
             return False
         item = self._resolve_item(actor)
         if item is None:
-            return True
-        if not item.implemented or item.action_cost != "action":
+            return _can_spend_action(combat_state, self.actor_id, COMMON_ACTION_USE_OBJECT)
+        if (
+            COMMON_ACTION_USE_OBJECT not in actor.common_actions
+            or not item.implemented
+            or not item_has_quantity(item)
+            or not _can_spend_item_action(actor, item)
+        ):
             return False
         if item.has_aoe:
             return self._aoe_targeting_for_item(combat_state, actor, item) is not None
-        return True
+        return self._target_for_item(combat_state, actor, item) is not None
 
     def execute(self, combat_state: CombatState) -> ActionResult:
         actor = _get_character(combat_state, self.actor_id)
@@ -937,23 +957,35 @@ class UseObjectAction(CombatAction):
             return ActionResult(False, f"Use object failed: actor {self.actor_id} not found.")
         if not self.is_valid(combat_state):
             return ActionResult(False, f"{actor.name} cannot Use an Object.")
-        actor.action_economy.spend_action()
-        actor.action_economy.spend_free_object_interaction()
         item = self._resolve_item(actor)
+        if item is None:
+            actor.action_economy.spend_action()
+            actor.action_economy.spend_free_object_interaction()
+            return ActionResult(
+                True,
+                (
+                    f"{actor.name} uses {self.object_name}. No item effect is implemented. "
+                    "Action spent: action_available=False."
+                ),
+            )
+
+        _spend_item_action(actor, item)
         if item is not None and item.has_aoe:
             targeting = self._aoe_targeting_for_item(combat_state, actor, item)
             if targeting is None:
                 return ActionResult(False, f"{actor.name} cannot place {item.name}.")
             result = _execute_area_item_effect(combat_state, actor, item, targeting)
-            if item.consumed_on_use:
-                _consume_item(actor, item)
+            consume_item(item)
             return result
+        target = self._target_for_item(combat_state, actor, item)
+        if target is None:
+            return ActionResult(False, f"{actor.name} cannot target {item.name}.")
+        result = _execute_single_target_item_effect(combat_state, actor, target, item)
+        consume_item(item)
         return ActionResult(
-            True,
-            (
-                f"{actor.name} uses {self.object_name}. No item effect is implemented. "
-                "Action spent: action_available=False."
-            ),
+            result.success,
+            f"{result.description} {_item_action_spent_text(item)}",
+            result.reward,
         )
 
     def _resolve_item(self, actor: Character) -> CombatItem | None:
@@ -992,6 +1024,32 @@ class UseObjectAction(CombatAction):
         if not _aoe_has_affected_creature(combat_state, targeting):
             return None
         return targeting
+
+    def _target_for_item(
+        self,
+        combat_state: CombatState,
+        actor: Character,
+        item: CombatItem,
+    ) -> Character | None:
+        target_type = normalize_target_type(item.target_type)
+        if target_type is ItemTargetType.POINT:
+            return None
+        if target_type is ItemTargetType.SELF:
+            return actor if _can_item_target_character(combat_state, actor, actor, item) else None
+        if self.target_id is not None:
+            target = _get_character(combat_state, self.target_id)
+            if target is not None and _can_item_target_character(
+                combat_state,
+                actor,
+                target,
+                item,
+            ):
+                return target
+            return None
+        for target in combat_state.characters:
+            if _can_item_target_character(combat_state, actor, target, item):
+                return target
+        return None
 
 
 @dataclass
@@ -1274,6 +1332,40 @@ def _can_spend_spell_action(actor: Character, spell: SpellAbility) -> bool:
     return actor.action_economy.action_available
 
 
+def _can_spend_item_action(actor: Character, item: CombatItem) -> bool:
+    action_cost = normalize_action_cost(item.action_cost)
+    if action_cost is ItemActionCost.REACTION:
+        return actor.action_economy.reaction_available
+    if action_cost is ItemActionCost.BONUS_ACTION:
+        return actor.action_economy.bonus_action_available
+    if action_cost is ItemActionCost.FREE_INTERACTION:
+        return actor.action_economy.free_object_interaction_available
+    return actor.action_economy.action_available
+
+
+def _spend_item_action(actor: Character, item: CombatItem) -> None:
+    action_cost = normalize_action_cost(item.action_cost)
+    if action_cost is ItemActionCost.REACTION:
+        actor.action_economy.spend_reaction()
+    elif action_cost is ItemActionCost.BONUS_ACTION:
+        actor.action_economy.spend_bonus_action()
+    elif action_cost is ItemActionCost.FREE_INTERACTION:
+        actor.action_economy.spend_free_object_interaction()
+    else:
+        actor.action_economy.spend_action()
+
+
+def _item_action_spent_text(item: CombatItem) -> str:
+    action_cost = normalize_action_cost(item.action_cost)
+    if action_cost is ItemActionCost.REACTION:
+        return "Reaction spent: reaction_available=False."
+    if action_cost is ItemActionCost.BONUS_ACTION:
+        return "Bonus action spent: bonus_action_available=False."
+    if action_cost is ItemActionCost.FREE_INTERACTION:
+        return "Free interaction spent: free_object_interaction_available=False."
+    return "Action spent: action_available=False."
+
+
 def _spend_spell_action(actor: Character, spell: SpellAbility) -> None:
     if spell.action_cost == "reaction":
         actor.action_economy.spend_reaction()
@@ -1289,6 +1381,40 @@ def _spell_action_spent_text(spell: SpellAbility) -> str:
     if spell.action_cost == "bonus_action":
         return "Bonus action spent: bonus_action_available=False."
     return "Action spent: action_available=False."
+
+
+def _can_item_target_character(
+    combat_state: CombatState,
+    actor: Character,
+    target: Character,
+    item: CombatItem,
+) -> bool:
+    target_type = normalize_target_type(item.target_type)
+    if target_type is ItemTargetType.SELF and target is not actor:
+        return False
+    if target_type is ItemTargetType.ALLY and target.team != actor.team:
+        return False
+    if target_type is ItemTargetType.ENEMY and target.team == actor.team:
+        return False
+    if target_type is ItemTargetType.POINT:
+        return False
+    if item_stabilizes(item):
+        if target.hp > 0:
+            return False
+    elif item_healing(item) is not None:
+        if target.is_dead or target.hp >= target.max_hp:
+            return False
+    elif _item_damage(item) is not None:
+        if target.is_dead:
+            return False
+    if _distance(actor.position, target.position, combat_state) > item.range:
+        return False
+    if item.thrown or item.range > 1:
+        if not _has_line_of_sight(combat_state, actor.position, target.position):
+            return False
+        if _cover_between(combat_state, actor.position, target.position) is CoverType.FULL_COVER:
+            return False
+    return True
 
 
 def _target_saves_against_spell(
@@ -1382,7 +1508,7 @@ def _execute_area_item_effect(
     total_damage = 0
 
     for affected in affected_targets:
-        raw_damage = _roll_damage(_item_damage(item))
+        raw_damage = _roll_damage(_item_damage(item) or 0)
         saved = _target_saves_against_item(
             actor,
             affected,
@@ -1391,7 +1517,7 @@ def _execute_area_item_effect(
             source_position=targeting.source_position,
         )
         if saved:
-            raw_damage = raw_damage // 2 if item.save_half_damage else 0
+            raw_damage = raw_damage // 2 if item_save_half_damage(item) else 0
         damage = apply_damage_modifiers(affected, raw_damage, _item_damage_type(item))
         _apply_damage_to_character(affected, damage)
         total_damage += damage
@@ -1402,21 +1528,73 @@ def _execute_area_item_effect(
         True,
         (
             f"{actor.name} uses {item.name}; {'; '.join(summaries)}. "
-            f"Total damage: {total_damage}. Action spent: action_available=False."
+            f"Total damage: {total_damage}. {_item_action_spent_text(item)}"
         ),
     )
 
 
+def _execute_single_target_item_effect(
+    combat_state: CombatState,
+    actor: Character,
+    target: Character,
+    item: CombatItem,
+) -> ActionResult:
+    healing_value = item_healing(item)
+    if healing_value is not None:
+        healing = _roll_damage(healing_value)
+        before_hp = target.hp
+        target.hp = min(target.max_hp, target.hp + healing)
+        if target.hp > 0:
+            target.stable = True
+        return ActionResult(
+            True,
+            (
+                f"{actor.name} uses {item.name} on {target.name} and heals "
+                f"{target.hp - before_hp} HP."
+            ),
+        )
+
+    if item_stabilizes(item):
+        if target.hp > 0:
+            return ActionResult(True, f"{actor.name} uses {item.name} on {target.name}.")
+        target.stable = True
+        return ActionResult(
+            True,
+            f"{actor.name} uses {item.name} and stabilizes {target.name}.",
+        )
+
+    damage_value = _item_damage(item)
+    if damage_value is not None:
+        raw_damage = _roll_damage(damage_value)
+        saved = _target_saves_against_item(
+            actor,
+            target,
+            item,
+            combat_state,
+            source_position=actor.position,
+        )
+        if saved:
+            raw_damage = raw_damage // 2 if item_save_half_damage(item) else 0
+        damage = apply_damage_modifiers(target, raw_damage, _item_damage_type(item))
+        _apply_damage_to_character(target, damage)
+        save_text = " after save" if saved else ""
+        return ActionResult(
+            True,
+            (
+                f"{actor.name} uses {item.name} on {target.name} for "
+                f"{damage} damage{save_text}."
+            ),
+        )
+
+    return ActionResult(True, f"{actor.name} uses {item.name}.")
+
+
 def _item_damage_type(item: CombatItem) -> object:
-    if item.effect is not None and item.effect.damage_type is not None:
-        return item.effect.damage_type
-    return item.damage_type
+    return item_damage_type(item)
 
 
-def _item_damage(item: CombatItem) -> int | str:
-    if item.effect is not None and item.effect.damage is not None:
-        return item.effect.damage
-    return item.damage or 0
+def _item_damage(item: CombatItem) -> int | str | None:
+    return item_damage(item)
 
 
 def _apply_temporary_ac_spell(actor: Character, spell: SpellAbility) -> None:
@@ -1454,10 +1632,11 @@ def _target_saves_against_item(
     combat_state: CombatState,
     source_position: Position,
 ) -> bool:
-    if item.save_ability is None:
+    save_ability = item_save_ability(item)
+    if save_ability is None:
         return False
-    save_roll = random.randint(1, 20) + ability_modifier(target.stats, item.save_ability)
-    if item.save_ability.casefold() == "dex":
+    save_roll = random.randint(1, 20) + ability_modifier(target.stats, save_ability)
+    if save_ability.casefold() == "dex":
         save_roll = apply_cover_to_dex_save(
             save_roll,
             _cover_between(combat_state, source_position, target.position),
@@ -1467,13 +1646,7 @@ def _target_saves_against_item(
 
 
 def _consume_item(actor: Character, item: CombatItem) -> None:
-    items = getattr(actor, "items", None)
-    if not isinstance(items, list):
-        return
-    for index, candidate in enumerate(items):
-        if candidate is item or getattr(candidate, "name", None) == item.name:
-            del items[index]
-            return
+    consume_item(item)
 
 
 def _can_area_spell_target(

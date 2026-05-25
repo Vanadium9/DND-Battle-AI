@@ -17,6 +17,7 @@ from combat.class_features import (
 from combat.damage import DamageType, normalize_character_damage_profile
 
 if TYPE_CHECKING:
+    from combat.items import ItemDefinition
     from combat.map import GridMap
     from combat.race_traits import RaceTraits
 
@@ -77,12 +78,16 @@ class Character:
     race_name: str | None = None
     race_traits: RaceTraits | None = None
     size: str = "Medium"
+    challenge_rating: float | str | None = None
+    xp_value: int = 0
+    role: str = "combatant"
     resistances: set[DamageType] = field(default_factory=set)
     immunities: set[DamageType] = field(default_factory=set)
     vulnerabilities: set[DamageType] = field(default_factory=set)
     fighting_style: str | None = None
     wearing_armor: bool = False
     weapons: list[WeaponAttack] = field(default_factory=list)
+    inventory: list[ItemDefinition] = field(default_factory=list)
     common_actions: list[str] = field(
         default_factory=lambda: [
             "move",
@@ -178,6 +183,14 @@ class Character:
             if weapon not in available_abilities:
                 available_abilities.append(weapon)
         return available_abilities
+
+    @property
+    def items(self) -> list[ItemDefinition]:
+        return self.inventory
+
+    @items.setter
+    def items(self, value: list[ItemDefinition]) -> None:
+        self.inventory = value
 
     def reset_combat_resources(self) -> None:
         reset_resources(self.resources)

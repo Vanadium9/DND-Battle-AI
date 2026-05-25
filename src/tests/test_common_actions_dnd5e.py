@@ -9,6 +9,7 @@ from combat import (
     GrappleAction,
     GridMap,
     HideAction,
+    PotionOfHealing,
     Position,
     ReadyAction,
     SearchAction,
@@ -178,6 +179,8 @@ def test_hide_can_use_passive_perception_dc(monkeypatch) -> None:
 
 def test_action_masks_include_common_action_resources() -> None:
     hero = make_character("Hero", Position(0, 0), Team.PLAYERS)
+    hero.hp = 5
+    hero.inventory = [PotionOfHealing()]
     ally = make_character("Ally", Position(0, 1), Team.PLAYERS, hp=0)
     enemy = make_character("Enemy", Position(1, 0), Team.ENEMIES)
     state = CombatState(

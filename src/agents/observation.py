@@ -38,34 +38,100 @@ from combat.spellcasting import (
     spell_system_available,
 )
 from combat.terrain import TerrainType
+from agents.entity_observation import (
+    CONDITION_FLAG_NAMES,
+    FEAT_FLAG_NAMES,
+    INVENTORY_ITEM_FLAG_NAMES,
+    PREPARED_SPELL_FLAG_NAMES,
+    TERRAIN_FEATURE_TYPES,
+    active_concentration_flag,
+    available_damage_type_flags,
+    class_id,
+    class_resource_flags,
+    condition_flags,
+    current_cover_status,
+    feat_flags,
+    global_feature_values,
+    inventory_usable_item_flags,
+    normalized_challenge_rating,
+    normalized_level,
+    normalized_proficiency_bonus,
+    normalized_xp_value,
+    prepared_spell_flags,
+    race_id,
+    reachable_by_actor,
+    role_id,
+    spell_slot_features,
+    subclass_id,
+    terrain_around_features,
+    threat_estimate,
+    visible_enemies_count,
+)
 
 
 MAX_NEARBY_CHARACTERS = 4
 BASE_CHARACTER_FEATURE_SIZE = 20
 DAMAGE_TYPE_FEATURE_SIZE = len(DAMAGE_TYPES)
 ACTOR_DAMAGE_ACTION_FEATURE_SIZE = DAMAGE_TYPE_FEATURE_SIZE
+ACTOR_COMMON_ACTION_FEATURE_SIZE = 18
+FEAT_FEATURE_SIZE = len(FEAT_FLAG_NAMES)
+CLASS_RESOURCE_FEATURE_SIZE = 4
+SPELL_SLOT_FEATURE_SIZE = 6
+PREPARED_SPELL_FEATURE_SIZE = len(PREPARED_SPELL_FLAG_NAMES)
+INVENTORY_ITEM_FEATURE_SIZE = len(INVENTORY_ITEM_FLAG_NAMES)
+TERRAIN_AROUND_FEATURE_SIZE = 4 * len(TERRAIN_FEATURE_TYPES)
+ACTOR_REAL_GAME_FEATURE_SIZE = (
+    5
+    + FEAT_FEATURE_SIZE
+    + 4
+    + CLASS_RESOURCE_FEATURE_SIZE
+    + SPELL_SLOT_FEATURE_SIZE
+    + PREPARED_SPELL_FEATURE_SIZE
+    + INVENTORY_ITEM_FEATURE_SIZE
+    + 1
+    + TERRAIN_AROUND_FEATURE_SIZE
+    + 1
+)
 OTHER_DAMAGE_PROFILE_FEATURE_SIZE = DAMAGE_TYPE_FEATURE_SIZE * 3
+OTHER_COMMON_ACTION_FEATURE_SIZE = 9
+OTHER_CONDITION_FEATURE_SIZE = len(CONDITION_FLAG_NAMES)
+OTHER_ENTITY_PROFILE_FEATURE_SIZE = 3 + 2 + OTHER_CONDITION_FEATURE_SIZE + 1 + 2 + 1
+OTHER_MAP_FEATURE_SIZE = 4
 ACTOR_CLASS_FEATURE_SIZE = 6
 ACTOR_MAP_FEATURE_SIZE = 10
-OTHER_MAP_FEATURE_SIZE = 2
+GLOBAL_FEATURE_SIZE = 7
+ACTOR_COMMON_ACTION_OFFSET = BASE_CHARACTER_FEATURE_SIZE
+ACTOR_REAL_GAME_OFFSET = ACTOR_COMMON_ACTION_OFFSET + ACTOR_COMMON_ACTION_FEATURE_SIZE
+ACTOR_DAMAGE_ACTION_OFFSET = ACTOR_REAL_GAME_OFFSET + ACTOR_REAL_GAME_FEATURE_SIZE
+ACTOR_MAP_FEATURE_OFFSET = ACTOR_DAMAGE_ACTION_OFFSET + ACTOR_DAMAGE_ACTION_FEATURE_SIZE
+ACTOR_CLASS_FEATURE_OFFSET = ACTOR_MAP_FEATURE_OFFSET + ACTOR_MAP_FEATURE_SIZE
+OTHER_COMMON_ACTION_OFFSET = BASE_CHARACTER_FEATURE_SIZE
+OTHER_DAMAGE_PROFILE_OFFSET = OTHER_COMMON_ACTION_OFFSET + OTHER_COMMON_ACTION_FEATURE_SIZE
+OTHER_ENTITY_PROFILE_OFFSET = OTHER_DAMAGE_PROFILE_OFFSET + OTHER_DAMAGE_PROFILE_FEATURE_SIZE
+OTHER_MAP_FEATURE_OFFSET = OTHER_ENTITY_PROFILE_OFFSET + OTHER_ENTITY_PROFILE_FEATURE_SIZE
 ACTOR_FEATURE_SIZE = (
     BASE_CHARACTER_FEATURE_SIZE
-    + 18
+    + ACTOR_COMMON_ACTION_FEATURE_SIZE
+    + ACTOR_REAL_GAME_FEATURE_SIZE
     + ACTOR_DAMAGE_ACTION_FEATURE_SIZE
     + ACTOR_MAP_FEATURE_SIZE
     + ACTOR_CLASS_FEATURE_SIZE
 )
 OTHER_CHARACTER_FEATURE_SIZE = (
     BASE_CHARACTER_FEATURE_SIZE
-    + 9
+    + OTHER_COMMON_ACTION_FEATURE_SIZE
     + OTHER_DAMAGE_PROFILE_FEATURE_SIZE
+    + OTHER_ENTITY_PROFILE_FEATURE_SIZE
     + OTHER_MAP_FEATURE_SIZE
 )
 CHARACTER_FEATURE_SIZE = OTHER_CHARACTER_FEATURE_SIZE
 OBSERVATION_SIZE = (
     ACTOR_FEATURE_SIZE
     + OTHER_CHARACTER_FEATURE_SIZE * MAX_NEARBY_CHARACTERS * 2
+    + GLOBAL_FEATURE_SIZE
 )
+PPO_INPUT_SIZE = OBSERVATION_SIZE
+GNN_NODE_FEATURE_SIZE = OTHER_CHARACTER_FEATURE_SIZE
 
 
 def encode_observation(state: CombatState, actor_id: int) -> torch.Tensor:
@@ -98,6 +164,7 @@ def encode_observation(state: CombatState, actor_id: int) -> torch.Tensor:
         *_encode_actor(actor, actor_id, state),
         *_encode_padded_group(allies, actor, state),
         *_encode_padded_group(enemies, actor, state),
+        *global_feature_values(state, actor_id),
     ]
     return torch.tensor(features, dtype=torch.float32)
 
@@ -127,9 +194,35 @@ def _encode_actor(
         float(_can_help(state, actor_id, actor)),
         float(_can_grapple(state, actor_id, actor)),
         float(_can_shove(state, actor_id, actor)),
+        *_encode_actor_real_game_features(actor, state),
         *_encode_available_damage_types(actor),
         *_encode_actor_map_features(actor, state),
         *_encode_actor_class_features(actor),
+    ]
+
+
+def _encode_actor_real_game_features(
+    actor: Character,
+    state: CombatState,
+) -> list[float]:
+    return [
+        normalized_level(actor),
+        normalized_proficiency_bonus(actor),
+        class_id(actor),
+        subclass_id(actor),
+        race_id(actor),
+        *feat_flags(actor),
+        float(actor.action_economy.action_available),
+        float(actor.action_economy.bonus_action_available),
+        float(actor.action_economy.reaction_available),
+        float(actor.action_economy.movement_remaining),
+        *class_resource_flags(actor),
+        *spell_slot_features(actor),
+        *prepared_spell_flags(actor),
+        *inventory_usable_item_flags(actor),
+        current_cover_status(state, actor),
+        *terrain_around_features(state, actor),
+        visible_enemies_count(state, actor),
     ]
 
 
@@ -185,8 +278,41 @@ def _encode_other_character(
         float(_can_grapple_target(state, actor, character)),
         float(_can_shove_target(state, actor, character)),
         *_encode_damage_profile(character),
-        _cover_value(_cover_between(state, actor.position, character.position)),
+        *_encode_other_entity_profile(character, actor, state),
+        *_encode_other_map_features(character, actor, state),
+    ]
+
+
+def _encode_other_entity_profile(
+    character: Character,
+    actor: Character,
+    state: CombatState,
+) -> list[float]:
+    hp_ratio = character.hp / character.max_hp if character.max_hp > 0 else 0.0
+    return [
+        class_id(character),
+        subclass_id(character),
+        role_id(character),
+        normalized_challenge_rating(character),
+        normalized_xp_value(character),
+        *condition_flags(character),
+        active_concentration_flag(character),
+        float(character.ac),
+        float(hp_ratio),
+        threat_estimate(character, actor, state),
+    ]
+
+
+def _encode_other_map_features(
+    character: Character,
+    actor: Character,
+    state: CombatState,
+) -> list[float]:
+    return [
         float(_has_line_of_sight(state, actor.position, character.position)),
+        _cover_value(_cover_between(state, actor.position, character.position)),
+        float(_distance(actor.position, character.position, state)),
+        reachable_by_actor(state, actor, character),
     ]
 
 
@@ -288,23 +414,7 @@ def _has_ranged_attack(character: Character) -> bool:
 
 
 def _encode_available_damage_types(character: Character) -> list[float]:
-    damage_types = {
-        damage_type
-        for weapon in character.available_weapons
-        for damage_type in (coerce_damage_type(weapon.damage_type),)
-        if damage_type is not None
-    }
-    for spell in available_castable_spells(character):
-        if spell.damage is None:
-            continue
-        damage_type = coerce_damage_type(spell.damage_type)
-        if damage_type is not None:
-            damage_types.add(damage_type)
-    for item in getattr(character, "items", ()) or ():
-        damage_type = coerce_damage_type(getattr(item, "damage_type", None))
-        if damage_type is not None:
-            damage_types.add(damage_type)
-    return _damage_type_flags(damage_types)
+    return available_damage_type_flags(character)
 
 
 def _encode_damage_profile(character: Character) -> list[float]:

@@ -16,6 +16,7 @@ def test_default_ruleset_loads_minimal_srd5e_surface() -> None:
     assert ruleset.supported_races == ("Human", "Dwarf", "Elf", "Halfling")
     assert ruleset.supported_spell_levels == (0, 1, 2, 3)
     assert ruleset.supported_feats == ("Ability Score Improvement",)
+    assert ruleset.cr_xp_table["1/4"] == 50
 
 
 def test_supported_content_checks_are_case_and_style_insensitive() -> None:

@@ -15,7 +15,7 @@ from agents.action_space import (
     ActionCategory,
     MainActionType,
 )
-from agents.observation import OBSERVATION_SIZE
+from agents.observation import PPO_INPUT_SIZE
 
 
 DEFAULT_TARGET_COUNT = 8
@@ -29,7 +29,7 @@ class PPOActorCritic(nn.Module):
 
     def __init__(
         self,
-        observation_size: int = OBSERVATION_SIZE,
+        observation_size: int = PPO_INPUT_SIZE,
         target_count: int = DEFAULT_TARGET_COUNT,
         move_count: int = DEFAULT_MOVE_COUNT,
         option_count: int = DEFAULT_OPTION_COUNT,

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -19,6 +19,7 @@ class Ruleset:
     supported_spell_levels: tuple[int, ...]
     supported_content_policy: dict[str, str]
     supported_feats: tuple[str, ...] = ()
+    cr_xp_table: dict[str, int] = field(default_factory=dict)
 
     @classmethod
     def from_mapping(cls, data: dict[str, Any]) -> "Ruleset":
@@ -45,6 +46,10 @@ class Ruleset:
                 for key, value in data.get("supported_content_policy", {}).items()
             },
             supported_feats=_coerce_str_tuple(data.get("supported_feats", ())),
+            cr_xp_table={
+                str(cr): int(xp)
+                for cr, xp in data.get("cr_xp_table", {}).items()
+            },
         )
 
     def is_supported_content(self, content_type: str, name: str | int) -> bool:

@@ -1,8 +1,9 @@
 from agents import (
     ACTOR_FEATURE_SIZE,
-    BASE_CHARACTER_FEATURE_SIZE,
+    ACTOR_DAMAGE_ACTION_OFFSET,
     DAMAGE_TYPE_FEATURE_SIZE,
     MAX_NEARBY_CHARACTERS,
+    OTHER_DAMAGE_PROFILE_OFFSET,
     OTHER_CHARACTER_FEATURE_SIZE,
     encode_observation,
 )
@@ -153,9 +154,9 @@ def test_observation_encodes_damage_types_and_target_damage_profile() -> None:
     )
 
     observation = encode_observation(state, actor_id=0)
-    actor_damage_start = BASE_CHARACTER_FEATURE_SIZE + 18
+    actor_damage_start = ACTOR_DAMAGE_ACTION_OFFSET
     enemy_start = ACTOR_FEATURE_SIZE + OTHER_CHARACTER_FEATURE_SIZE * MAX_NEARBY_CHARACTERS
-    enemy_profile_start = enemy_start + BASE_CHARACTER_FEATURE_SIZE + 9
+    enemy_profile_start = enemy_start + OTHER_DAMAGE_PROFILE_OFFSET
     enemy_resistance_start = enemy_profile_start
     enemy_immunity_start = enemy_profile_start + DAMAGE_TYPE_FEATURE_SIZE
 

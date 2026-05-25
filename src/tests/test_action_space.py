@@ -8,6 +8,7 @@ from agents import (
     MainActionType,
     build_action_masks,
     decode_action,
+    explain_action_mask,
 )
 from combat import (
     ActionSurgeAction,
@@ -16,14 +17,22 @@ from combat import (
     EndTurnAction,
     FighterArcher,
     FighterChampionGreatsword,
+    FighterLevel1Basic,
     Goblin,
     GridMap,
     MoveAction,
     Orc,
+    PotionOfHealing,
     Position,
     SearchAction,
     SecondWindAction,
     ShoveAction,
+    Stats,
+    Team,
+    TerrainType,
+    WeaponAttack,
+    WizardEvoker,
+    build_character,
 )
 
 
@@ -250,3 +259,102 @@ def test_decode_action_rejects_masked_components() -> None:
             state=state,
             actor_id=0,
         )
+
+
+def reason_for(explanations: list[dict[str, object]], action: str) -> str:
+    return next(str(item["reason"]) for item in explanations if item["action"] == action)
+
+
+def test_explain_mask_blocks_extra_attack_for_level_one_fighter() -> None:
+    fighter = FighterLevel1Basic(Position(0, 0))
+    enemy = Goblin(Position(1, 0))
+    state = CombatState(
+        characters=[fighter, enemy],
+        grid_map=GridMap(width=4, height=4),
+    )
+
+    explanations = explain_action_mask(state, actor_id=0)
+
+    assert reason_for(explanations, "ClassFeature:Extra Attack") == "blocked: wrong_level"
+
+
+def test_explain_mask_blocks_fireball_for_level_one_wizard() -> None:
+    wizard = build_character(
+        name="Wizard",
+        class_name="Wizard",
+        subclass_name=None,
+        level=1,
+        stats=Stats(int=16),
+    )
+    enemy = Goblin(Position(1, 0))
+    state = CombatState(
+        characters=[wizard, enemy],
+        grid_map=GridMap(width=5, height=5),
+    )
+
+    explanations = explain_action_mask(state, actor_id=0)
+
+    assert reason_for(explanations, "CastSpell:Fireball") == "blocked: wrong_level"
+
+
+def test_explain_mask_blocks_zero_quantity_potion() -> None:
+    fighter = FighterLevel1Basic(Position(0, 0))
+    fighter.hp = 5
+    fighter.inventory = [PotionOfHealing(quantity=0)]
+    state = CombatState(
+        characters=[fighter],
+        grid_map=GridMap(width=3, height=3),
+    )
+
+    masks = build_action_masks(state, actor_id=0)
+    explanations = explain_action_mask(state, actor_id=0)
+
+    assert not masks["main_action_type"][MainActionType.USE_OBJECT]
+    assert reason_for(explanations, "UseObject:Potion of Healing") == "blocked: no_item_quantity"
+
+
+def test_explain_mask_blocks_ranged_attack_against_full_cover() -> None:
+    bow = WeaponAttack(name="Bow", range=6, damage=1, ability_score="dex")
+    archer = FighterArcher(Position(0, 0))
+    archer.weapons = [bow]
+    target = Goblin(Position(2, 0))
+    state = CombatState(
+        characters=[archer, target],
+        grid_map=GridMap(
+            width=4,
+            height=3,
+            terrain_grid=[
+                [TerrainType.NORMAL, TerrainType.HIGH_COVER, TerrainType.NORMAL, TerrainType.NORMAL],
+                [TerrainType.NORMAL, TerrainType.NORMAL, TerrainType.NORMAL, TerrainType.NORMAL],
+                [TerrainType.NORMAL, TerrainType.NORMAL, TerrainType.NORMAL, TerrainType.NORMAL],
+            ],
+        ),
+    )
+
+    masks = build_action_masks(state, actor_id=0)
+    explanations = explain_action_mask(state, actor_id=0)
+
+    assert not masks["main_action_type"][MainActionType.ATTACK]
+    assert reason_for(explanations, "Attack:Bow->Goblin") == "blocked: full_cover"
+
+
+def test_explain_mask_blocks_blocked_movement_cell() -> None:
+    fighter = FighterLevel1Basic(Position(0, 0))
+    state = CombatState(
+        characters=[fighter],
+        grid_map=GridMap(
+            width=3,
+            height=3,
+            terrain_grid=[
+                [TerrainType.NORMAL, TerrainType.BLOCKED, TerrainType.NORMAL],
+                [TerrainType.NORMAL, TerrainType.NORMAL, TerrainType.NORMAL],
+                [TerrainType.NORMAL, TerrainType.NORMAL, TerrainType.NORMAL],
+            ],
+        ),
+    )
+
+    masks = build_action_masks(state, actor_id=0)
+    explanations = explain_action_mask(state, actor_id=0)
+
+    assert not masks["move_index"][move_index(Position(1, 0), width=3)]
+    assert reason_for(explanations, "Move:1,0") == "blocked: blocked_cell"

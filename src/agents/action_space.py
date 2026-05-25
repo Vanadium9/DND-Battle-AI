@@ -58,20 +58,38 @@ from combat.actions import (
 )
 from combat.class_features import (
     available_implemented_class_features,
+    feature_resource_name,
     implemented_feature_active_actions,
 )
 from combat.cover import CoverType
-from combat.items import CombatItem, resolve_item, supported_item_aoe_shape
+from combat.items import (
+    CombatItem,
+    ItemActionCost,
+    ItemTargetType,
+    item_damage,
+    item_has_quantity,
+    item_healing,
+    item_stabilizes,
+    normalize_action_cost,
+    normalize_target_type,
+    resolve_item,
+    supported_item_aoe_shape,
+)
 from combat.models import Character, CombatState, Position, SpellAbility, WeaponAttack
 from combat.spellcasting import (
+    SUPPORTED_SPELLS,
+    SpellDefinition,
     available_castable_spells,
     can_target_spell as can_target_spell_with_rules,
+    spell_cast_level,
     spell_has_aoe,
     spell_aoe_shape,
     spell_requires_direction,
     spell_requires_target_cell,
     spell_system_available,
 )
+from rules.classes import get_class_definition
+from rules.subclasses import get_subclass_definition
 
 
 class ActionCategory(IntEnum):
@@ -113,6 +131,21 @@ SHOVE_PUSH_OPTION = 1
 SEARCH_PERCEPTION_OPTION = 0
 SEARCH_INVESTIGATION_OPTION = 1
 
+ALLOWED = "allowed"
+BLOCKED_NO_ACTION_AVAILABLE = "blocked: no_action_available"
+BLOCKED_NO_BONUS_ACTION_AVAILABLE = "blocked: no_bonus_action_available"
+BLOCKED_NO_REACTION_AVAILABLE = "blocked: no_reaction_available"
+BLOCKED_NO_SPELL_SLOT = "blocked: no_spell_slot"
+BLOCKED_UNSUPPORTED_FEATURE = "blocked: unsupported_feature"
+BLOCKED_WRONG_LEVEL = "blocked: wrong_level"
+BLOCKED_NO_VALID_TARGET = "blocked: no_valid_target"
+BLOCKED_NO_ITEM_QUANTITY = "blocked: no_item_quantity"
+BLOCKED_BLOCKED_CELL = "blocked: blocked_cell"
+BLOCKED_UNREACHABLE_CELL = "blocked: unreachable_cell"
+BLOCKED_NO_LINE_OF_SIGHT = "blocked: no_line_of_sight"
+BLOCKED_FULL_COVER = "blocked: full_cover"
+BLOCKED_NO_COVER_TO_HIDE = "blocked: no_cover_to_hide"
+
 
 @dataclass(frozen=True)
 class SpellOption:
@@ -120,6 +153,32 @@ class SpellOption:
 
     spell: SpellAbility
     direction: AoEDirection | None = None
+
+
+def explain_action_mask(state: CombatState, actor_id: int) -> list[dict[str, object]]:
+    """Return debug explanations for action mask decisions."""
+
+    actor = state.character_at(actor_id)
+    if actor is None:
+        return [
+            {
+                "action": "Actor",
+                "allowed": False,
+                "reason": BLOCKED_NO_VALID_TARGET,
+            }
+        ]
+
+    masks = build_action_masks(state, actor_id)
+    explanations: list[dict[str, object]] = []
+    explanations.extend(_explain_main_actions(state, actor_id, actor, masks))
+    explanations.extend(_explain_action_categories(state, actor_id, actor, masks))
+    explanations.extend(_explain_movement(state, actor, masks))
+    explanations.extend(_explain_weapon_targets(state, actor, masks))
+    explanations.extend(_explain_spells(state, actor))
+    explanations.extend(_explain_items(state, actor))
+    explanations.extend(_explain_class_features(state, actor))
+    explanations.extend(_explain_passive_hooks(actor))
+    return explanations
 
 
 def build_action_masks(state: CombatState, actor_id: int) -> dict[str, torch.Tensor]:
@@ -160,6 +219,212 @@ def build_action_masks(state: CombatState, actor_id: int) -> dict[str, torch.Ten
         "direction_index": direction_mask,
         "option_index": option_mask,
     }
+
+
+def _explain_main_actions(
+    state: CombatState,
+    actor_id: int,
+    actor: Character,
+    masks: dict[str, torch.Tensor],
+) -> list[dict[str, object]]:
+    explanations: list[dict[str, object]] = []
+    for action_type in MainActionType:
+        allowed = bool(masks["main_action_type"][int(action_type)])
+        reason = ALLOWED if allowed else _main_action_block_reason(state, actor_id, actor, action_type)
+        explanations.append(
+            {
+                "action": action_type.name,
+                "allowed": allowed,
+                "reason": reason,
+            }
+        )
+    return explanations
+
+
+def _explain_action_categories(
+    state: CombatState,
+    actor_id: int,
+    actor: Character,
+    masks: dict[str, torch.Tensor],
+) -> list[dict[str, object]]:
+    explanations: list[dict[str, object]] = []
+    for category in ActionCategory:
+        allowed = bool(masks["action_category"][int(category)])
+        reason = ALLOWED if allowed else _action_category_block_reason(state, actor_id, actor, category)
+        explanations.append(
+            {
+                "action": f"Category:{category.name}",
+                "allowed": allowed,
+                "reason": reason,
+            }
+        )
+    return explanations
+
+
+def _explain_movement(
+    state: CombatState,
+    actor: Character,
+    masks: dict[str, torch.Tensor],
+) -> list[dict[str, object]]:
+    explanations: list[dict[str, object]] = []
+    if state.grid_map is None:
+        return explanations
+
+    for position in _grid_positions(state):
+        index = _move_index_from_position(state, position)
+        allowed = bool(masks["move_index"][index])
+        if allowed:
+            reason = ALLOWED
+        elif state.grid_map.is_blocked(position) or not state.grid_map.is_walkable(position):
+            reason = BLOCKED_BLOCKED_CELL
+        else:
+            reason = BLOCKED_UNREACHABLE_CELL
+        explanations.append(
+            {
+                "action": f"Move:{position.x},{position.y}",
+                "allowed": allowed,
+                "reason": reason,
+                "position": position,
+            }
+        )
+    return explanations
+
+
+def _explain_weapon_targets(
+    state: CombatState,
+    actor: Character,
+    masks: dict[str, torch.Tensor],
+) -> list[dict[str, object]]:
+    explanations: list[dict[str, object]] = []
+    for weapon in actor.weapons:
+        for target_id, target in enumerate(state.characters):
+            if target is actor:
+                continue
+            allowed = _is_valid_weapon_target(state, actor, target, weapon)
+            explanations.append(
+                {
+                    "action": f"Attack:{weapon.name}->{target.name}",
+                    "allowed": allowed,
+                    "reason": ALLOWED if allowed else _weapon_target_block_reason(state, actor, target, weapon),
+                    "target_id": target_id,
+                }
+            )
+    return explanations
+
+
+def _explain_spells(
+    state: CombatState,
+    actor: Character,
+) -> list[dict[str, object]]:
+    explanations: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for spell in [*getattr(actor, "cantrips", ()), *getattr(actor, "prepared_spells", ())]:
+        spell_key = _lookup_key(getattr(spell, "name", ""))
+        if spell_key in seen:
+            continue
+        seen.add(spell_key)
+        allowed = _spell_debug_allowed(state, actor, spell)
+        explanations.append(
+            {
+                "action": f"CastSpell:{spell.name}",
+                "allowed": allowed,
+                "reason": ALLOWED if allowed else _spell_block_reason(state, actor, spell),
+            }
+        )
+
+    for definition in _higher_level_spell_definitions(actor):
+        spell_key = _lookup_key(definition.name)
+        if spell_key in seen:
+            continue
+        seen.add(spell_key)
+        explanations.append(
+            {
+                "action": f"CastSpell:{definition.name}",
+                "allowed": False,
+                "reason": BLOCKED_WRONG_LEVEL,
+            }
+        )
+    return explanations
+
+
+def _explain_items(state: CombatState, actor: Character) -> list[dict[str, object]]:
+    explanations: list[dict[str, object]] = []
+    inventory = getattr(actor, "inventory", ())
+    if not isinstance(inventory, (list, tuple)):
+        return explanations
+    for item in inventory:
+        resolved = resolve_item(actor, item)
+        if resolved is None:
+            continue
+        allowed = _item_option_is_valid(state, actor, resolved)
+        explanations.append(
+            {
+                "action": f"UseObject:{resolved.name}",
+                "allowed": allowed,
+                "reason": ALLOWED if allowed else _item_block_reason(state, actor, resolved),
+            }
+        )
+    return explanations
+
+
+def _explain_class_features(
+    state: CombatState,
+    actor: Character,
+) -> list[dict[str, object]]:
+    explanations: list[dict[str, object]] = []
+    level = int(getattr(actor, "level", 1))
+    active_feature_names = {_lookup_key(feature.name) for feature in actor.class_features}
+    available_feature_names = {
+        _lookup_key(feature.name)
+        for feature in available_implemented_class_features(actor)
+    }
+
+    for feature in _class_and_subclass_feature_definitions(actor):
+        feature_key = _lookup_key(feature.name)
+        allowed = (
+            feature_key in active_feature_names
+            and feature_key in available_feature_names
+            and bool(getattr(feature, "implemented", False))
+        )
+        if allowed:
+            reason = ALLOWED
+        elif int(getattr(feature, "level", 1)) > level:
+            reason = BLOCKED_WRONG_LEVEL
+        elif not getattr(feature, "implemented", False):
+            reason = BLOCKED_UNSUPPORTED_FEATURE
+        elif feature_key not in active_feature_names:
+            reason = BLOCKED_UNSUPPORTED_FEATURE
+        else:
+            reason = _feature_resource_block_reason(actor, feature)
+        explanations.append(
+            {
+                "action": f"ClassFeature:{feature.name}",
+                "allowed": allowed,
+                "reason": reason,
+            }
+        )
+    return explanations
+
+
+def _explain_passive_hooks(actor: Character) -> list[dict[str, object]]:
+    hooks = []
+    if getattr(actor, "race_traits", None) is not None:
+        hooks.append(
+            {
+                "action": "RaceTraits:combat_hooks",
+                "allowed": True,
+                "reason": ALLOWED,
+            }
+        )
+    if any(getattr(feat, "implemented", False) for feat in getattr(actor, "feats", ())):
+        hooks.append(
+            {
+                "action": "FeatHooks:combat_hooks",
+                "allowed": True,
+                "reason": ALLOWED,
+            }
+        )
+    return hooks
 
 
 def decode_action(
@@ -332,6 +597,24 @@ def decode_action(
                     item=item,
                     direction=direction,
                 )
+            if normalize_target_type(item.target_type) is not ItemTargetType.POINT:
+                target_id = _target_or_first_valid(
+                    target_index,
+                    state,
+                    actor_id,
+                    lambda _target_id, target: _can_target_with_item(
+                        state,
+                        actor,
+                        target,
+                        item,
+                    ),
+                )
+                return UseObjectAction(
+                    actor_id=actor_id,
+                    object_name=item.name,
+                    item=item,
+                    target_id=target_id,
+                )
         return UseObjectAction(
             actor_id=actor_id,
             object_name=_object_name_for_option(state.characters[actor_id], option_index),
@@ -429,10 +712,7 @@ def _build_main_action_type_mask(
         actor,
         COMMON_ACTION_SEARCH,
     )
-    main_action_type_mask[int(MainActionType.USE_OBJECT)] = _can_spend_action(
-        actor,
-        COMMON_ACTION_USE_OBJECT,
-    )
+    main_action_type_mask[int(MainActionType.USE_OBJECT)] = _has_usable_item(state, actor)
     main_action_type_mask[int(MainActionType.READY)] = _can_ready(actor)
     main_action_type_mask[int(MainActionType.GRAPPLE)] = _has_special_melee_target(
         state,
@@ -549,6 +829,14 @@ def _build_target_mask(
                 and _distance(actor.position, target.position, state) <= 1
             ):
                 target_mask[target_id] = True
+
+    if main_action_type_mask[int(MainActionType.USE_OBJECT)]:
+        for item in _available_items(actor):
+            if normalize_target_type(item.target_type) is ItemTargetType.POINT:
+                continue
+            for target_id, target in enumerate(state.characters):
+                if _can_target_with_item(state, actor, target, item):
+                    target_mask[target_id] = True
 
     return target_mask
 
@@ -822,6 +1110,344 @@ def _can_spend_action(actor: Character, action_name: str) -> bool:
     )
 
 
+def _main_action_block_reason(
+    state: CombatState,
+    actor_id: int,
+    actor: Character,
+    action_type: MainActionType,
+) -> str:
+    if action_type in {
+        MainActionType.ATTACK,
+        MainActionType.CAST_SPELL,
+        MainActionType.DASH,
+        MainActionType.DISENGAGE,
+        MainActionType.DODGE,
+        MainActionType.HELP,
+        MainActionType.HIDE,
+        MainActionType.SEARCH,
+        MainActionType.READY,
+        MainActionType.GRAPPLE,
+        MainActionType.SHOVE,
+        MainActionType.STABILIZE,
+        MainActionType.IMPROVISED,
+    } and not actor.action_economy.action_available:
+        return BLOCKED_NO_ACTION_AVAILABLE
+
+    if action_type is MainActionType.ATTACK:
+        return _attack_block_reason(state, actor)
+    if action_type is MainActionType.CAST_SPELL:
+        return _cast_spell_block_reason(state, actor)
+    if action_type is MainActionType.USE_OBJECT:
+        return _use_object_block_reason(state, actor)
+    if action_type is MainActionType.HIDE:
+        return BLOCKED_NO_COVER_TO_HIDE if not _can_hide(state, actor) else BLOCKED_NO_VALID_TARGET
+    if action_type is MainActionType.READY and not actor.action_economy.reaction_available:
+        return BLOCKED_NO_REACTION_AVAILABLE
+    if action_type in {MainActionType.GRAPPLE, MainActionType.SHOVE}:
+        return BLOCKED_NO_VALID_TARGET
+    if action_type is MainActionType.STABILIZE:
+        return BLOCKED_NO_VALID_TARGET
+    if action_type is MainActionType.HELP:
+        return BLOCKED_NO_VALID_TARGET
+    return BLOCKED_UNSUPPORTED_FEATURE if not actor.can_take_turn else BLOCKED_NO_VALID_TARGET
+
+
+def _action_category_block_reason(
+    state: CombatState,
+    actor_id: int,
+    actor: Character,
+    category: ActionCategory,
+) -> str:
+    if category is ActionCategory.BONUS_ACTION:
+        if not actor.action_economy.bonus_action_available:
+            return BLOCKED_NO_BONUS_ACTION_AVAILABLE
+        return BLOCKED_NO_VALID_TARGET
+    if category is ActionCategory.REACTION:
+        if not actor.action_economy.reaction_available:
+            return BLOCKED_NO_REACTION_AVAILABLE
+        return BLOCKED_NO_VALID_TARGET
+    if category is ActionCategory.MAIN_ACTION:
+        if not actor.action_economy.action_available:
+            return BLOCKED_NO_ACTION_AVAILABLE
+        return BLOCKED_NO_VALID_TARGET
+    if category is ActionCategory.MOVEMENT:
+        return BLOCKED_UNREACHABLE_CELL
+    if category is ActionCategory.CLASS_FEATURE:
+        if _has_unavailable_implemented_feature(actor):
+            return BLOCKED_NO_VALID_TARGET
+        return BLOCKED_UNSUPPORTED_FEATURE
+    return BLOCKED_NO_VALID_TARGET
+
+
+def _attack_block_reason(state: CombatState, actor: Character) -> str:
+    if not actor.weapons:
+        return BLOCKED_NO_VALID_TARGET
+    reasons = [
+        _weapon_target_block_reason(state, actor, target, weapon)
+        for weapon in actor.weapons
+        for target in state.characters
+        if target is not actor
+    ]
+    return _first_priority_reason(
+        reasons,
+        (
+            BLOCKED_FULL_COVER,
+            BLOCKED_NO_LINE_OF_SIGHT,
+            BLOCKED_NO_VALID_TARGET,
+        ),
+        BLOCKED_NO_VALID_TARGET,
+    )
+
+
+def _cast_spell_block_reason(state: CombatState, actor: Character) -> str:
+    if COMMON_ACTION_CAST_SPELL not in actor.common_actions:
+        return BLOCKED_UNSUPPORTED_FEATURE
+    if not actor.action_economy.action_available:
+        return BLOCKED_NO_ACTION_AVAILABLE
+    spells = [*getattr(actor, "cantrips", ()), *getattr(actor, "prepared_spells", ())]
+    if not spells:
+        return BLOCKED_NO_VALID_TARGET
+    if any(_spell_block_reason(state, actor, spell) == BLOCKED_NO_SPELL_SLOT for spell in spells):
+        return BLOCKED_NO_SPELL_SLOT
+    reasons = [_spell_block_reason(state, actor, spell) for spell in spells]
+    return _first_priority_reason(
+        reasons,
+        (
+            BLOCKED_WRONG_LEVEL,
+            BLOCKED_FULL_COVER,
+            BLOCKED_NO_LINE_OF_SIGHT,
+            BLOCKED_NO_VALID_TARGET,
+        ),
+        BLOCKED_NO_VALID_TARGET,
+    )
+
+
+def _use_object_block_reason(state: CombatState, actor: Character) -> str:
+    inventory = getattr(actor, "inventory", ())
+    if not isinstance(inventory, (list, tuple)) or not inventory:
+        return BLOCKED_NO_ITEM_QUANTITY
+    items = [resolve_item(actor, item) for item in inventory]
+    items = [item for item in items if item is not None]
+    if not items or all(not item_has_quantity(item) for item in items):
+        return BLOCKED_NO_ITEM_QUANTITY
+    reasons = [_item_block_reason(state, actor, item) for item in items]
+    return _first_priority_reason(
+        reasons,
+        (
+            BLOCKED_NO_ACTION_AVAILABLE,
+            BLOCKED_NO_BONUS_ACTION_AVAILABLE,
+            BLOCKED_NO_REACTION_AVAILABLE,
+            BLOCKED_FULL_COVER,
+            BLOCKED_NO_LINE_OF_SIGHT,
+            BLOCKED_NO_VALID_TARGET,
+        ),
+        BLOCKED_NO_VALID_TARGET,
+    )
+
+
+def _weapon_target_block_reason(
+    state: CombatState,
+    actor: Character,
+    target: Character,
+    weapon: WeaponAttack,
+) -> str:
+    if not actor.action_economy.action_available:
+        return BLOCKED_NO_ACTION_AVAILABLE
+    if target is actor or target.team == actor.team or target.is_dead or not weapon.available:
+        return BLOCKED_NO_VALID_TARGET
+    if _distance(actor.position, target.position, state) > weapon.range:
+        return BLOCKED_NO_VALID_TARGET
+    if weapon.range > 1:
+        if _cover_between(state, actor.position, target.position) is CoverType.FULL_COVER:
+            return BLOCKED_FULL_COVER
+        if not _has_line_of_sight(state, actor.position, target.position):
+            return BLOCKED_NO_LINE_OF_SIGHT
+    return BLOCKED_NO_VALID_TARGET
+
+
+def _spell_block_reason(
+    state: CombatState,
+    actor: Character,
+    spell: SpellAbility,
+) -> str:
+    if spell.action_cost == "reaction" and not actor.action_economy.reaction_available:
+        return BLOCKED_NO_REACTION_AVAILABLE
+    if spell.action_cost == "bonus_action" and not actor.action_economy.bonus_action_available:
+        return BLOCKED_NO_BONUS_ACTION_AVAILABLE
+    if spell.action_cost not in {"reaction", "bonus_action"} and not actor.action_economy.action_available:
+        return BLOCKED_NO_ACTION_AVAILABLE
+    if spell.spell_level > 0 and not _has_spell_slot_for_cast(actor, spell):
+        return BLOCKED_NO_SPELL_SLOT
+    if spell_requires_target_cell(spell):
+        return _target_cell_spell_block_reason(state, actor, spell)
+    if spell_requires_direction(spell):
+        return BLOCKED_NO_VALID_TARGET
+    target_reasons = [
+        _spell_target_block_reason(state, actor, target, spell)
+        for target in state.characters
+    ]
+    return _first_priority_reason(
+        target_reasons,
+        (
+            BLOCKED_FULL_COVER,
+            BLOCKED_NO_LINE_OF_SIGHT,
+            BLOCKED_NO_VALID_TARGET,
+        ),
+        BLOCKED_NO_VALID_TARGET,
+    )
+
+
+def _spell_debug_allowed(
+    state: CombatState,
+    actor: Character,
+    spell: SpellAbility,
+) -> bool:
+    if spell not in available_castable_spells(actor):
+        return False
+    if spell_requires_direction(spell):
+        return any(
+            _can_direction_with_spell(state, actor, direction, spell)
+            for direction in AOE_DIRECTIONS
+        )
+    return _spell_option_is_valid(state, actor, SpellOption(spell=spell))
+
+
+def _spell_target_block_reason(
+    state: CombatState,
+    actor: Character,
+    target: Character,
+    spell: SpellAbility,
+) -> str:
+    if target.is_dead:
+        return BLOCKED_NO_VALID_TARGET
+    if _distance(actor.position, target.position, state) > spell.range:
+        return BLOCKED_NO_VALID_TARGET
+    if _cover_between(state, actor.position, target.position) is CoverType.FULL_COVER:
+        return BLOCKED_FULL_COVER
+    if not _has_line_of_sight(state, actor.position, target.position):
+        return BLOCKED_NO_LINE_OF_SIGHT
+    if not _can_target_spell(state, actor, target, spell):
+        return BLOCKED_NO_VALID_TARGET
+    return ALLOWED
+
+
+def _target_cell_spell_block_reason(
+    state: CombatState,
+    actor: Character,
+    spell: SpellAbility,
+) -> str:
+    reasons = [
+        _target_cell_block_reason(state, actor, position, spell.range)
+        for position in _grid_positions(state)
+    ]
+    return _first_priority_reason(
+        reasons,
+        (
+            BLOCKED_FULL_COVER,
+            BLOCKED_NO_LINE_OF_SIGHT,
+            BLOCKED_NO_VALID_TARGET,
+        ),
+        BLOCKED_NO_VALID_TARGET,
+    )
+
+
+def _target_cell_block_reason(
+    state: CombatState,
+    actor: Character,
+    position: Position,
+    range_limit: int,
+) -> str:
+    if _distance(actor.position, position, state) > range_limit:
+        return BLOCKED_NO_VALID_TARGET
+    if _cover_between(state, actor.position, position) is CoverType.FULL_COVER:
+        return BLOCKED_FULL_COVER
+    if not _has_line_of_sight(state, actor.position, position):
+        return BLOCKED_NO_LINE_OF_SIGHT
+    return BLOCKED_NO_VALID_TARGET
+
+
+def _item_block_reason(state: CombatState, actor: Character, item: CombatItem) -> str:
+    if not item_has_quantity(item):
+        return BLOCKED_NO_ITEM_QUANTITY
+    if not item.implemented:
+        return BLOCKED_UNSUPPORTED_FEATURE
+    action_cost = normalize_action_cost(item.action_cost)
+    if action_cost is ItemActionCost.REACTION and not actor.action_economy.reaction_available:
+        return BLOCKED_NO_REACTION_AVAILABLE
+    if action_cost is ItemActionCost.BONUS_ACTION and not actor.action_economy.bonus_action_available:
+        return BLOCKED_NO_BONUS_ACTION_AVAILABLE
+    if action_cost is ItemActionCost.ACTION and not actor.action_economy.action_available:
+        return BLOCKED_NO_ACTION_AVAILABLE
+    shape = supported_item_aoe_shape(item)
+    if shape is AoEShape.RADIUS:
+        reasons = [
+            _target_cell_block_reason(state, actor, position, item.range)
+            for position in _grid_positions(state)
+        ]
+        return _first_priority_reason(
+            reasons,
+            (
+                BLOCKED_FULL_COVER,
+                BLOCKED_NO_LINE_OF_SIGHT,
+                BLOCKED_NO_VALID_TARGET,
+            ),
+            BLOCKED_NO_VALID_TARGET,
+        )
+    if shape in {AoEShape.CONE, AoEShape.LINE}:
+        return BLOCKED_NO_VALID_TARGET
+    target_reasons = [
+        _item_target_block_reason(state, actor, target, item)
+        for target in state.characters
+    ]
+    return _first_priority_reason(
+        target_reasons,
+        (
+            BLOCKED_FULL_COVER,
+            BLOCKED_NO_LINE_OF_SIGHT,
+            BLOCKED_NO_VALID_TARGET,
+        ),
+        BLOCKED_NO_VALID_TARGET,
+    )
+
+
+def _item_target_block_reason(
+    state: CombatState,
+    actor: Character,
+    target: Character,
+    item: CombatItem,
+) -> str:
+    target_type = normalize_target_type(item.target_type)
+    if target_type is ItemTargetType.SELF and target is not actor:
+        return BLOCKED_NO_VALID_TARGET
+    if target_type is ItemTargetType.ALLY and target.team != actor.team:
+        return BLOCKED_NO_VALID_TARGET
+    if target_type is ItemTargetType.ENEMY and target.team == actor.team:
+        return BLOCKED_NO_VALID_TARGET
+    if _distance(actor.position, target.position, state) > item.range:
+        return BLOCKED_NO_VALID_TARGET
+    if item.thrown or item.range > 1:
+        if _cover_between(state, actor.position, target.position) is CoverType.FULL_COVER:
+            return BLOCKED_FULL_COVER
+        if not _has_line_of_sight(state, actor.position, target.position):
+            return BLOCKED_NO_LINE_OF_SIGHT
+    if not _can_target_with_item(state, actor, target, item):
+        return BLOCKED_NO_VALID_TARGET
+    return ALLOWED
+
+
+def _can_spend_item_action(actor: Character, item: CombatItem) -> bool:
+    if COMMON_ACTION_USE_OBJECT not in actor.common_actions or not actor.can_take_turn:
+        return False
+    action_cost = normalize_action_cost(item.action_cost)
+    if action_cost is ItemActionCost.REACTION:
+        return actor.action_economy.reaction_available
+    if action_cost is ItemActionCost.BONUS_ACTION:
+        return actor.action_economy.bonus_action_available
+    if action_cost is ItemActionCost.FREE_INTERACTION:
+        return actor.action_economy.free_object_interaction_available
+    return actor.action_economy.action_available
+
+
 def _can_cast_spell(state: CombatState, actor: Character) -> bool:
     if not _can_spend_action(actor, COMMON_ACTION_CAST_SPELL):
         return False
@@ -831,6 +1457,90 @@ def _can_cast_spell(state: CombatState, actor: Character) -> bool:
         _spell_has_valid_target_or_no_target(state, actor, spell)
         for spell in _available_spells(actor, "action")
     )
+
+
+def _has_spell_slot_for_cast(actor: Character, spell: SpellAbility) -> bool:
+    if spell.spell_level <= 0:
+        return True
+    if not spell_system_available(actor):
+        return False
+    casting_level = spell_cast_level(spell)
+    return int(getattr(actor, "spell_slots_remaining", {}).get(casting_level, 0)) > 0
+
+
+def _higher_level_spell_definitions(actor: Character) -> list[SpellDefinition]:
+    class_name = getattr(actor, "class_name", None)
+    if class_name is None:
+        return []
+    class_key = _lookup_key(class_name)
+    max_spell_level = max(
+        [0, *[int(level) for level in getattr(actor, "spell_slots", {}).keys()]]
+    )
+    return [
+        definition
+        for definition in SUPPORTED_SPELLS
+        if definition.implemented
+        and definition.spell_level > max_spell_level
+        and any(_lookup_key(spell_class) == class_key for spell_class in definition.classes)
+    ]
+
+
+def _class_and_subclass_feature_definitions(actor: Character) -> list[object]:
+    features: list[object] = []
+    class_definition = get_class_definition(getattr(actor, "class_name", None))
+    if class_definition is not None:
+        for feature_level in sorted(class_definition.level_features):
+            features.extend(class_definition.level_features[feature_level])
+
+    subclass_name = getattr(actor, "subclass_name", None)
+    if class_definition is not None and subclass_name is not None:
+        subclass_definition = get_subclass_definition(class_definition.name, subclass_name)
+        if subclass_definition is not None:
+            for feature_level in sorted(subclass_definition.level_features):
+                features.extend(subclass_definition.level_features[feature_level])
+    return features
+
+
+def _feature_resource_block_reason(actor: Character, feature: object) -> str:
+    action_cost = getattr(feature, "action_cost", None)
+    if action_cost == "bonus_action" and not actor.action_economy.bonus_action_available:
+        return BLOCKED_NO_BONUS_ACTION_AVAILABLE
+    if action_cost == "reaction" and not actor.action_economy.reaction_available:
+        return BLOCKED_NO_REACTION_AVAILABLE
+    if action_cost == "action" and not actor.action_economy.action_available:
+        return BLOCKED_NO_ACTION_AVAILABLE
+    resource_name = feature_resource_name(feature)
+    if resource_name is not None:
+        resource = getattr(actor, "resources", {}).get(resource_name)
+        if resource is None or not resource.available:
+            return BLOCKED_UNSUPPORTED_FEATURE
+    return BLOCKED_NO_VALID_TARGET
+
+
+def _has_unavailable_implemented_feature(actor: Character) -> bool:
+    for feature in getattr(actor, "class_features", ()):
+        if not getattr(feature, "implemented", False):
+            continue
+        if feature not in available_implemented_class_features(actor):
+            return True
+    return False
+
+
+def _first_priority_reason(
+    reasons: list[str],
+    priority: tuple[str, ...],
+    fallback: str,
+) -> str:
+    if not reasons:
+        return fallback
+    for reason in priority:
+        if reason in reasons:
+            return reason
+    return reasons[0]
+
+
+def _lookup_key(value: object) -> str:
+    return "".join(character for character in str(value).casefold() if character.isalnum())
 
 
 def _available_spells(
@@ -999,6 +1709,8 @@ def _can_target_cell_with_item(
     target_cell: Position,
     item: CombatItem,
 ) -> bool:
+    if not item_has_quantity(item) or not _can_spend_item_action(actor, item):
+        return False
     if state.grid_map is not None and not state.grid_map.in_bounds(target_cell):
         return False
     if _distance(actor.position, target_cell, state) > item.range:
@@ -1022,6 +1734,8 @@ def _can_direction_with_item(
     direction: AoEDirection,
     item: CombatItem,
 ) -> bool:
+    if not item_has_quantity(item) or not _can_spend_item_action(actor, item):
+        return False
     shape = supported_item_aoe_shape(item)
     if shape not in {AoEShape.CONE, AoEShape.LINE}:
         return False
@@ -1143,6 +1857,10 @@ def _has_stabilize_target(
         and _distance(actor.position, target.position, state) <= 1
         for target_id, target in enumerate(state.characters)
     )
+
+
+def _has_usable_item(state: CombatState, actor: Character) -> bool:
+    return any(_item_option_is_valid(state, actor, item) for item in _available_items(actor))
 
 
 def _can_ready(actor: Character) -> bool:
@@ -1289,13 +2007,13 @@ def _item_for_option(actor: Character | None, option_index: int) -> CombatItem |
 
 
 def _available_items(actor: Character) -> list[CombatItem]:
-    items = getattr(actor, "items", None)
+    items = getattr(actor, "inventory", None)
     if not isinstance(items, (list, tuple)):
         return []
     return [
         item
         for item in (resolve_item(actor, candidate) for candidate in items)
-        if item is not None and item.implemented
+        if item is not None and item.implemented and item_has_quantity(item)
     ]
 
 
@@ -1304,6 +2022,8 @@ def _item_option_is_valid(
     actor: Character,
     item: CombatItem,
 ) -> bool:
+    if not item_has_quantity(item) or not _can_spend_item_action(actor, item):
+        return False
     shape = supported_item_aoe_shape(item)
     if shape is AoEShape.RADIUS:
         return any(
@@ -1314,6 +2034,42 @@ def _item_option_is_valid(
         return any(
             _can_direction_with_item(state, actor, direction, item)
             for direction in AOE_DIRECTIONS
+        )
+    if normalize_target_type(item.target_type) is ItemTargetType.POINT:
+        return False
+    return any(_can_target_with_item(state, actor, target, item) for target in state.characters)
+
+
+def _can_target_with_item(
+    state: CombatState,
+    actor: Character,
+    target: Character,
+    item: CombatItem,
+) -> bool:
+    target_type = normalize_target_type(item.target_type)
+    if target_type is ItemTargetType.SELF and target is not actor:
+        return False
+    if target_type is ItemTargetType.ALLY and target.team != actor.team:
+        return False
+    if target_type is ItemTargetType.ENEMY and target.team == actor.team:
+        return False
+    if target_type is ItemTargetType.POINT:
+        return False
+    if item_stabilizes(item):
+        if target.hp > 0:
+            return False
+    elif item_healing(item) is not None:
+        if target.is_dead or target.hp >= target.max_hp:
+            return False
+    elif item_damage(item) is not None:
+        if target.is_dead:
+            return False
+    if _distance(actor.position, target.position, state) > item.range:
+        return False
+    if item.thrown or item.range > 1:
+        return (
+            _has_line_of_sight(state, actor.position, target.position)
+            and _cover_between(state, actor.position, target.position) is not CoverType.FULL_COVER
         )
     return True
 

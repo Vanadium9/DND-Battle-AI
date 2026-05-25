@@ -1387,3 +1387,269 @@ DamageType enum:
 - fire immunity обнуляет Fireball damage
 - resistance делит урон
 - vulnerability удваивает урон
+
+## 39. Запрос: Добавь расширенный набор базовых врагов
+
+Файл:
+- src/combat/presets.py
+- src/combat/monsters.py
+
+Добавь:
+- GoblinMelee
+- GoblinArcher
+- OrcWarrior
+- SkeletonArcher
+- Bandit
+- Wolf
+- FireElementalSimple
+
+Требования:
+- все враги используют common actions
+- у каждого врага должны быть:
+  - weapons
+  - stats
+  - hp
+  - ac
+  - speed
+  - challenge_rating
+  - xp_value
+  - role
+- FireElementalSimple должен иметь immunity FIRE
+- SkeletonArcher должен иметь immunity или resistance к POISON, если damage system это поддерживает
+- Wolf должен иметь melee attack и повышенную скорость
+- GoblinArcher должен иметь ranged weapon
+- не реализуй сложные легендарные действия
+
+Добавь тесты:
+- каждый preset создаётся без ошибок
+- у каждого врага есть валидная атака
+- у каждого врага есть CR и XP
+
+## 40. Запрос: Добавь систему опыта за победу над врагами
+
+Файлы:
+- src/rules/xp.py
+- src/combat/monsters.py
+- src/combat/environment.py
+- src/combat/rewards.py
+
+Требования:
+- каждый Enemy/Monster должен иметь:
+  - challenge_rating
+  - xp_value
+- XP начисляется после завершения боя
+- XP начисляется персонажам команды победителей
+- для MVP делить XP поровну между участниками команды игроков
+- не начислять XP нейросети как reward напрямую
+- RL reward и D&D XP должны быть разными системами:
+  - reward нужен для обучения поведения
+  - XP нужен для progression/campaign mode
+
+Добавь CR XP table в config:
+- 0: 10
+- 1/8: 25
+- 1/4: 50
+- 1/2: 100
+- 1: 200
+- 2: 450
+- 3: 700
+- 4: 1100
+- 5: 1800
+
+Добавь функции:
+- get_xp_for_cr(cr) -> int
+- calculate_encounter_xp(monsters) -> int
+- award_party_xp(party, defeated_monsters)
+
+Добавь тесты:
+- XP по CR считается корректно
+- XP делится между party
+- level up после боя возможен
+- XP не начисляется при поражении
+
+## 41. Запрос: Добавь систему инвентаря и используемых предметов
+
+Важно:
+этот блок реализуется после классов, spellcasting и action economy.
+
+Файлы:
+- src/combat/inventory.py
+- src/combat/items.py
+- src/combat/common_actions.py
+- src/character/schema.py
+
+Требования:
+- Character должен иметь inventory
+- ItemDefinition:
+  - name
+  - item_type
+  - quantity
+  - action_cost:
+    - ACTION
+    - BONUS_ACTION
+    - REACTION
+    - FREE_INTERACTION
+  - target_type:
+    - SELF
+    - ALLY
+    - ENEMY
+    - POINT
+  - range
+  - effect
+  - consumable: bool
+  - implemented: bool
+- UseObject common action должен уметь применять предметы
+- action masks должны учитывать:
+  - наличие предмета
+  - quantity > 0
+  - action economy
+  - валидность цели
+  - range
+  - line of sight, если предмет метательный
+
+Для MVP реализовать:
+- Potion of Healing:
+  - consumable
+  - action
+  - healing
+- Bomb или AlchemistFire как simplified custom item:
+  - consumable
+  - thrown item
+  - fire damage
+  - range
+  - DEX save или attack roll
+- HealerKit:
+  - consumable charges
+  - stabilize target
+
+Требования:
+- после использования consumable quantity уменьшается
+- если quantity = 0, item скрывается action mask
+- character builder должен позволять добавлять только implemented items
+- reward должен учитывать:
+  - полезное лечение
+  - урон по врагу
+  - штраф за урон по союзнику
+  - штраф за трату предмета без эффекта
+
+Добавь тесты:
+- potion лечит
+- potion тратится
+- bomb наносит damage
+- нельзя использовать предмет без quantity
+- UseObject тратит правильный action resource
+
+## 42. Запрос: Обнови action masks с учётом новых систем
+
+Обнови action masks с учётом новых систем:
+- levels
+- class features
+- subclass features
+- race traits
+- feats
+- spell slots
+- inventory
+- map obstacles
+- cover
+- terrain cost
+- line of sight
+
+Файл:
+- src/agents/action_space.py
+
+Action masks должны учитывать:
+- уровень персонажа
+- реализована ли feature
+- выбран ли subclass
+- доступен ли class resource
+- доступна ли bonus action
+- доступна ли reaction
+- есть ли нужный spell slot
+- prepared ли spell
+- есть ли item quantity > 0
+- есть ли race/feat combat hook
+- достижима ли клетка движения
+- не заблокирована ли клетка
+- есть ли line of sight
+- не находится ли цель за full cover
+- есть ли укрытие для Hide
+
+Добавь debug режим:
+- explain_action_mask(state, actor_id)
+
+Функция должна возвращать список действий и причины:
+- allowed
+- blocked: no_action_available
+- blocked: no_bonus_action_available
+- blocked: no_reaction_available
+- blocked: no_spell_slot
+- blocked: unsupported_feature
+- blocked: wrong_level
+- blocked: no_valid_target
+- blocked: no_item_quantity
+- blocked: blocked_cell
+- blocked: unreachable_cell
+- blocked: no_line_of_sight
+- blocked: full_cover
+- blocked: no_cover_to_hide
+
+Добавь тесты:
+- Fighter level 1 не имеет Extra Attack
+- Wizard level 1 не имеет Fireball
+- potion masked при quantity = 0
+- ranged attack masked при full cover
+- movement masked для blocked cell
+
+## 43. Запрос: Обнови observation encoder под реальные игровые признаки
+
+Файлы:
+- src/agents/observation.py
+- src/agents/entity_observation.py
+
+Добавь признаки актёра:
+- level normalized
+- proficiency_bonus normalized
+- class_id
+- subclass_id
+- race_id
+- feat flags
+- action_available
+- bonus_action_available
+- reaction_available
+- movement_remaining
+- class resources:
+  - second_wind_available
+  - action_surge_available
+  - channel_divinity_available
+  - arcane_recovery_available
+- spell slots current/max levels 1-3
+- prepared spell flags
+- inventory usable item flags
+- current cover status
+- terrain around actor
+- visible enemies count
+
+Добавь признаки других существ:
+- known class/monster role
+- challenge_rating normalized
+- estimated_xp_value normalized
+- resistances/immunities/vulnerabilities
+- conditions
+- active concentration
+- current AC
+- current HP ratio
+- threat estimate
+- line_of_sight_from_actor
+- cover_from_actor
+- distance_to_actor
+- reachable_by_actor
+
+Добавь global features:
+- round_number
+- initiative_position
+- allies_alive
+- enemies_alive
+- encounter_difficulty_estimate
+- map width/height normalized
+
+Обнови input size PPO/GNN моделей и тесты.

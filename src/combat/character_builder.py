@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from combat.abilities import SpellAbility, WeaponAttack
+from combat.items import ItemDefinition
 from combat.models import Character, Position, Stats, Team
 
 if TYPE_CHECKING:
@@ -36,6 +37,7 @@ class CharacterBuildRequest:
     known_spells: tuple[str, ...] = ()
     prepared_spells: tuple[str, ...] = ()
     cantrips: tuple[str, ...] = ()
+    inventory: tuple[str | ItemDefinition, ...] = ()
 
 
 def supported_class_options(
@@ -77,6 +79,14 @@ def supported_spell_options(
     from combat.spellcasting import get_supported_spell_definitions
 
     return get_supported_spell_definitions(class_name, level)
+
+
+def supported_item_options() -> tuple[ItemDefinition, ...]:
+    """Return implemented items that a builder UI/CLI may show."""
+
+    from combat.inventory import get_supported_item_definitions
+
+    return get_supported_item_definitions()
 
 
 def validate_class_selection(
@@ -142,6 +152,16 @@ def validate_spell_selection(
     )
 
 
+def validate_item_selection(
+    items: tuple[str | ItemDefinition, ...] = (),
+) -> None:
+    """Validate that selected inventory items are implemented."""
+
+    from combat.inventory import validate_item_selection as validate_items
+
+    validate_items(items)
+
+
 def build_character(
     request: CharacterBuildRequest | None = None,
     **kwargs: object,
@@ -168,9 +188,13 @@ def build_character(
         prepared_spells=request.prepared_spells,
         cantrips=request.cantrips,
     )
+    validate_item_selection(request.inventory)
     cantrips: list[SpellAbility] = resolve_spell_list(request.cantrips)
     prepared_spells: list[SpellAbility] = resolve_spell_list(request.prepared_spells)
     known_spells: list[SpellAbility] = resolve_spell_list(request.known_spells)
+    from combat.inventory import resolve_inventory_items
+
+    inventory = resolve_inventory_items(request.inventory)
     character = Character(
         name=request.name,
         hp=request.hp,
@@ -191,6 +215,7 @@ def build_character(
         known_spells=known_spells,
         prepared_spells=prepared_spells,
         cantrips=cantrips,
+        inventory=inventory,
     )
     sync_character_progression(character)
     return character

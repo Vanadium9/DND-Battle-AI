@@ -9,6 +9,15 @@ from typing import Any
 from rules.progression import get_level_for_xp, get_proficiency_bonus
 from rules.feats import FeatDefinition, get_feat_definition
 from rules.races import get_race_definition
+from combat.items import (
+    ItemDefinition,
+    item_damage,
+    item_damage_type,
+    item_healing,
+    item_stabilizes,
+    normalize_action_cost,
+    normalize_target_type,
+)
 
 
 @dataclass(frozen=True)
@@ -126,6 +135,55 @@ class AbilityScoreImprovementSchema:
 
 
 @dataclass(frozen=True)
+class CharacterInventoryItemSchema:
+    """Serialized inventory item metadata."""
+
+    name: str
+    item_type: str
+    quantity: int
+    action_cost: str
+    target_type: str
+    range: int
+    consumable: bool
+    implemented: bool
+    healing: str | int | None = None
+    damage: str | int | None = None
+    damage_type: str | None = None
+    stabilize: bool = False
+
+    @classmethod
+    def from_value(cls, item: object) -> "CharacterInventoryItemSchema":
+        if isinstance(item, ItemDefinition):
+            damage_type = item_damage_type(item)
+            return cls(
+                name=item.name,
+                item_type=item.item_type,
+                quantity=int(item.quantity),
+                action_cost=normalize_action_cost(item.action_cost).name,
+                target_type=normalize_target_type(item.target_type).name,
+                range=int(item.range),
+                consumable=bool(item.consumable),
+                implemented=bool(item.implemented),
+                healing=item_healing(item),
+                damage=item_damage(item),
+                damage_type=str(getattr(damage_type, "value", damage_type))
+                if damage_type is not None
+                else None,
+                stabilize=item_stabilizes(item),
+            )
+        return cls(
+            name=str(getattr(item, "name", item)),
+            item_type=str(getattr(item, "item_type", "unknown")),
+            quantity=int(getattr(item, "quantity", 0)),
+            action_cost=str(getattr(item, "action_cost", "")),
+            target_type=str(getattr(item, "target_type", "")),
+            range=int(getattr(item, "range", 0)),
+            consumable=bool(getattr(item, "consumable", False)),
+            implemented=bool(getattr(item, "implemented", False)),
+        )
+
+
+@dataclass(frozen=True)
 class CharacterSchema:
     """Minimal character schema used by importer-facing code."""
 
@@ -134,6 +192,7 @@ class CharacterSchema:
     race: CharacterRaceSchema = CharacterRaceSchema()
     feats: tuple[CharacterFeatSchema, ...] = ()
     ability_score_improvements: tuple[AbilityScoreImprovementSchema, ...] = ()
+    inventory: tuple[CharacterInventoryItemSchema, ...] = ()
 
     @classmethod
     def from_character(cls, character: object) -> "CharacterSchema":
@@ -176,6 +235,10 @@ class CharacterSchema:
             ability_score_improvements=tuple(
                 AbilityScoreImprovementSchema.from_value(asi)
                 for asi in getattr(character, "ability_score_improvements", ())
+            ),
+            inventory=tuple(
+                CharacterInventoryItemSchema.from_value(item)
+                for item in getattr(character, "inventory", ())
             ),
         )
 

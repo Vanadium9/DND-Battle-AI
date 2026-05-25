@@ -26,6 +26,12 @@ from rules.progression import (
     spell_slots_for_level,
     sync_character_progression,
 )
+from rules.xp import (
+    CR_XP_TABLE,
+    award_party_xp,
+    calculate_encounter_xp,
+    get_xp_for_cr,
+)
 from rules.classes import (
     CLASS_DEFINITIONS,
     ClassDefinition,
@@ -98,6 +104,7 @@ __all__ = [
     "CLASS_DEFINITIONS",
     "CHAMPION_DEFINITION",
     "CLERIC_DEFINITION",
+    "CR_XP_TABLE",
     "EVOCATION_DEFINITION",
     "MAX_SUPPORTED_LEVEL",
     "MIN_SUPPORTED_LEVEL",
@@ -117,10 +124,12 @@ __all__ = [
     "XP_THRESHOLDS",
     "WIZARD_DEFINITION",
     "apply_level_up",
+    "award_party_xp",
     "build_class_features",
     "build_class_features_from_definitions",
     "build_class_resources",
     "can_level_up",
+    "calculate_encounter_xp",
     "class_uses_spellcasting",
     "class_uses_spellcasting_progression",
     "create_default_registry",
@@ -130,6 +139,7 @@ __all__ = [
     "get_feat_prerequisite_failures",
     "get_level_for_xp",
     "get_proficiency_bonus",
+    "get_xp_for_cr",
     "get_max_spell_level_for_progression",
     "get_race_definition",
     "get_registry",

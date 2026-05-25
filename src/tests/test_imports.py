@@ -5,9 +5,11 @@ from agents import (
     DEFAULT_MOVE_COUNT,
     DEFAULT_OPTION_COUNT,
     DEFAULT_TARGET_COUNT,
+    GNN_NODE_FEATURE_SIZE,
     MAIN_ACTION_TYPE_COUNT,
     MAX_NEARBY_CHARACTERS,
     OBSERVATION_SIZE,
+    PPO_INPUT_SIZE,
     ActionCategory,
     BaseAgent,
     MainActionType,
@@ -15,6 +17,7 @@ from agents import (
     RandomAgent,
     build_action_masks,
     decode_action,
+    explain_action_mask,
     encode_observation,
 )
 from combat import (
@@ -32,6 +35,7 @@ from combat import (
     ClassFeature,
     CharacterBuildRequest,
     Condition,
+    CR_XP_TABLE,
     DashAction,
     DisengageAction,
     DodgeAction,
@@ -41,6 +45,7 @@ from combat import (
     FighterChampionArcher,
     FighterChampionGreatsword,
     FighterLevel1Basic,
+    Bomb,
     Goblin,
     GrappleAction,
     GridMap,
@@ -50,6 +55,7 @@ from combat import (
     InitiativeCheckResult,
     InitiativeResult,
     InitiativeRoll,
+    ItemDefinition,
     EncounterGenerator,
     FeatureDefinition,
     MoveAction,
@@ -74,9 +80,11 @@ from combat import (
     apply_combat_hook,
     apply_level_four_choice,
     apply_level_up,
+    award_party_xp,
     can_choose_asi_or_feat,
     can_level_up,
     can_use_feature_action,
+    calculate_encounter_xp,
     character_has_class_feature,
     character_has_feat,
     build_character,
@@ -86,6 +94,7 @@ from combat import (
     get_active_feat_definitions,
     get_level_for_xp,
     get_proficiency_bonus,
+    get_xp_for_cr,
     get_supported_feats_for_builder,
     has_damage_resistance,
     implemented_class_features,
@@ -109,15 +118,19 @@ from combat import (
     use_halfling_lucky,
     UseObjectAction,
     WeaponAttack,
+    PotionOfHealing,
     weapon_is_racially_proficient,
     weapon_attack_count_for_attack_action,
     supported_class_options,
+    supported_item_options,
     supported_subclass_options,
     validate_class_selection,
+    validate_item_selection,
 )
 from character import (
     AbilityScoreImprovementSchema,
     CharacterFeatSchema,
+    CharacterInventoryItemSchema,
     CharacterProgressionSchema,
     CharacterRaceSchema,
     CharacterSchema,
@@ -174,9 +187,12 @@ def test_project_imports() -> None:
     assert DEFAULT_MOVE_COUNT is not None
     assert DEFAULT_OPTION_COUNT is not None
     assert DEFAULT_TARGET_COUNT is not None
+    assert GNN_NODE_FEATURE_SIZE is not None
     assert decode_action is not None
+    assert explain_action_mask is not None
     assert MAX_NEARBY_CHARACTERS is not None
     assert OBSERVATION_SIZE is not None
+    assert PPO_INPUT_SIZE == OBSERVATION_SIZE
     assert PPOActorCritic is not None
     assert encode_observation is not None
     assert ActionEconomy is not None
@@ -194,6 +210,8 @@ def test_project_imports() -> None:
     assert CharacterBuildRequest is not None
     assert ClassFeature is not None
     assert DashAction is not None
+    assert CR_XP_TABLE is not None
+    assert Bomb is not None
     assert DisengageAction is not None
     assert DodgeAction is not None
     assert Enemy is not None
@@ -209,6 +227,7 @@ def test_project_imports() -> None:
     assert InitiativeCheckResult is not None
     assert InitiativeResult is not None
     assert InitiativeRoll is not None
+    assert ItemDefinition is not None
     assert EncounterGenerator is not None
     assert FeatureDefinition is not None
     assert Ability is not None
@@ -239,8 +258,10 @@ def test_project_imports() -> None:
     assert apply_combat_hook is not None
     assert apply_level_four_choice is not None
     assert apply_level_up is not None
+    assert award_party_xp is not None
     assert can_choose_asi_or_feat is not None
     assert can_level_up is not None
+    assert calculate_encounter_xp is not None
     assert can_use_feature_action is not None
     assert character_has_class_feature is not None
     assert character_has_feat is not None
@@ -251,6 +272,7 @@ def test_project_imports() -> None:
     assert get_active_feat_definitions is not None
     assert get_level_for_xp is not None
     assert get_proficiency_bonus is not None
+    assert get_xp_for_cr is not None
     assert get_supported_feats_for_builder is not None
     assert has_damage_resistance is not None
     assert implemented_class_features is not None
@@ -267,18 +289,22 @@ def test_project_imports() -> None:
     assert should_use_great_weapon_fighting is not None
     assert spend_feature_resource is not None
     assert Team is not None
+    assert PotionOfHealing is not None
     assert use_halfling_lucky is not None
     assert UseObjectAction is not None
     assert weapon_is_racially_proficient is not None
     assert weapon_attack_count_for_attack_action is not None
     assert supported_class_options is not None
+    assert supported_item_options is not None
     assert supported_subclass_options is not None
     assert validate_class_selection is not None
+    assert validate_item_selection is not None
     assert CombatConfig is not None
     assert PPOConfig is not None
     assert TrainingConfig is not None
     assert AbilityScoreImprovementSchema is not None
     assert CharacterFeatSchema is not None
+    assert CharacterInventoryItemSchema is not None
     assert CharacterProgressionSchema is not None
     assert CharacterRaceSchema is not None
     assert CharacterSchema is not None

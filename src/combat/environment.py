@@ -47,6 +47,7 @@ from combat.rewards import (
     calculate_combat_reward,
     snapshot_combat_state,
 )
+from rules.xp import award_party_xp
 
 
 class CombatEnvironment:
@@ -73,6 +74,8 @@ class CombatEnvironment:
         self.current_turn_index = 0
         self.round_number = 1
         self.action_log: list[str] = []
+        self.xp_awarded = False
+        self.last_awarded_xp = 0
         self.reset()
 
     def reset(self) -> CombatState:
@@ -84,6 +87,8 @@ class CombatEnvironment:
         self.combat_state = CombatState(characters=characters, grid_map=grid_map)
         self.combat_state.reset_combat_resources()
         self.action_log = []
+        self.xp_awarded = False
+        self.last_awarded_xp = 0
         self._initialize_turn_order()
         self._sync_turn_metadata()
         self._skip_unavailable_active_actor()
@@ -144,6 +149,7 @@ class CombatEnvironment:
         if not isinstance(action, EndTurnAction) and result.success:
             self._auto_end_turn_if_actor_has_no_actions(action.actor_id)
         if result.success and self.is_done():
+            self._award_xp_if_combat_complete()
             self.combat_state.reset_combat_resources()
         self._sync_turn_metadata()
         return self._with_reward(result, reward_before, active_actor.team, action)
@@ -205,6 +211,36 @@ class CombatEnvironment:
         if len(living_teams) != 1:
             return None
         return next(iter(living_teams))
+
+    def _award_xp_if_combat_complete(self) -> None:
+        if self.xp_awarded or not self.is_done():
+            return
+
+        winner = self.get_winner()
+        if winner is not Team.PLAYERS:
+            self.xp_awarded = True
+            return
+
+        party = [
+            character
+            for character in self.combat_state.characters
+            if character.team is Team.PLAYERS
+        ]
+        defeated_monsters = [
+            character
+            for character in self.combat_state.characters
+            if character.team is not Team.PLAYERS and character.is_dead
+        ]
+        total_xp = award_party_xp(party, defeated_monsters)
+        self.last_awarded_xp = total_xp
+        self.xp_awarded = True
+        if total_xp > 0:
+            self._record_result(
+                ActionResult(
+                    True,
+                    f"Awarded {total_xp} XP to player party after victory.",
+                )
+            )
 
     def _available_move_actions(
         self,
@@ -474,6 +510,9 @@ class CombatEnvironment:
             "level": character.level,
             "experience": character.experience,
             "proficiency_bonus": character.proficiency_bonus,
+            "challenge_rating": character.challenge_rating,
+            "xp_value": character.xp_value,
+            "role": character.role,
             "alive": character.is_alive,
             "action_available": character.action_economy.action_available,
             "bonus_action_available": character.action_economy.bonus_action_available,

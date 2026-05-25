@@ -13,6 +13,16 @@ from combat.models import (
     Team,
     WeaponAttack,
 )
+from combat.monsters import (
+    BASIC_MONSTER_PRESETS,
+    Bandit,
+    FireElementalSimple,
+    GoblinArcher,
+    GoblinMelee,
+    OrcWarrior,
+    SkeletonArcher,
+    Wolf,
+)
 from combat.spellcasting import resolve_spell_list
 from rules.progression import build_class_features, build_class_resources
 
@@ -219,64 +229,20 @@ def WizardEvoker(position: Position | None = None) -> Character:
 
 
 def Goblin(position: Position | None = None) -> Enemy:
-    """Create a weak enemy with melee and ranged options."""
+    """Backward-compatible generic goblin preset."""
 
-    return Enemy(
-        name="Goblin",
-        hp=7,
-        max_hp=7,
-        ac=13,
-        position=position or Position(5, 1),
-        speed=3,
-        stats=Stats(str=8, dex=14, con=10, int=10, wis=8, cha=8),
-        proficiency_bonus=2,
-        weapons=[
-            WeaponAttack(
-                name="Scimitar",
-                description="Light melee attack.",
-                range=1,
-                damage="1d6",
-                attack_bonus=0,
-                ability_score="dex",
-                damage_ability_score="dex",
-            ),
-            WeaponAttack(
-                name="Shortbow",
-                description="Weak ranged attack.",
-                range=5,
-                damage="1d6",
-                attack_bonus=0,
-                ability_score="dex",
-                damage_ability_score="dex",
-            ),
-        ],
-    )
+    enemy = GoblinMelee(position)
+    enemy.name = "Goblin"
+    enemy.weapons.append(GoblinArcher(position).weapons[0])
+    return enemy
 
 
 def Orc(position: Position | None = None) -> Enemy:
-    """Create a tougher enemy with more HP and damage."""
+    """Backward-compatible generic orc preset."""
 
-    return Enemy(
-        name="Orc",
-        hp=18,
-        max_hp=18,
-        ac=13,
-        position=position or Position(5, 3),
-        speed=3,
-        stats=Stats(str=16, dex=12, con=16, int=8, wis=11, cha=10),
-        proficiency_bonus=2,
-        weapons=[
-            WeaponAttack(
-                name="Greataxe",
-                description="Heavy melee attack.",
-                range=1,
-                damage="1d12",
-                attack_bonus=0,
-                ability_score="str",
-                damage_ability_score="str",
-            )
-        ],
-    )
+    enemy = OrcWarrior(position)
+    enemy.name = "Orc"
+    return enemy
 
 
 def create_test_encounter() -> CombatState:

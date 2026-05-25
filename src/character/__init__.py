@@ -3,6 +3,7 @@
 from character.schema import (
     AbilityScoreImprovementSchema,
     CharacterFeatSchema,
+    CharacterInventoryItemSchema,
     CharacterProgressionSchema,
     CharacterRaceSchema,
     CharacterSchema,
@@ -11,6 +12,7 @@ from character.schema import (
 __all__ = [
     "AbilityScoreImprovementSchema",
     "CharacterFeatSchema",
+    "CharacterInventoryItemSchema",
     "CharacterProgressionSchema",
     "CharacterRaceSchema",
     "CharacterSchema",

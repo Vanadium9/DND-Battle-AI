@@ -1,4 +1,8 @@
-"""Reward shaping for D&D-like tactical combat."""
+"""Reward shaping for D&D-like tactical combat.
+
+Campaign XP is handled separately in rules.xp and is never added directly to
+the RL reward signal.
+"""
 
 from __future__ import annotations
 
@@ -31,6 +35,7 @@ class RewardConfig:
     untriggered_ready_penalty: float = 0.02
     no_effect_action_penalty: float = 0.03
     friendly_fire_penalty: float = 0.05
+    item_healing_reward: float = 0.05
 
 
 @dataclass(frozen=True)
@@ -188,6 +193,7 @@ def calculate_combat_reward(
         "untriggered_ready": 0.0,
         "no_effect_action": 0.0,
         "friendly_fire": 0.0,
+        "item_healing": 0.0,
     }
 
     if action is not None and action_success:
@@ -214,6 +220,7 @@ def calculate_combat_reward(
         or ally_deaths > 0
         or after.winner is not None
         or any(value > 0 for key, value in breakdown.items() if key.startswith("tactical_"))
+        or breakdown["item_healing"] > 0
     )
     if action_success and not has_meaningful_event:
         breakdown["useless_turn"] = -reward_config.useless_turn_penalty
@@ -255,12 +262,20 @@ def _common_action_rewards(
         "untriggered_ready": 0.0,
         "no_effect_action": 0.0,
         "friendly_fire": 0.0,
+        "item_healing": 0.0,
     }
 
     if action_name in {"CastSpellAction", "UseObjectAction"}:
         ally_damage = _team_damage_taken(before, after, actor_team)
         if ally_damage > 0:
             rewards["friendly_fire"] = -ally_damage * config.friendly_fire_penalty
+        if action_name == "UseObjectAction":
+            ally_healing = max(
+                0,
+                after.hp_by_team[actor_team] - before.hp_by_team[actor_team],
+            )
+            if ally_healing > 0:
+                rewards["item_healing"] = ally_healing * config.item_healing_reward
 
     if action_name == "GrappleAction":
         if _successful_tactical_grapple(before, after, actor_team, action):
