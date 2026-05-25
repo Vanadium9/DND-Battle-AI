@@ -8,7 +8,13 @@ from typing import TYPE_CHECKING
 
 from combat.action_economy import ActionEconomy, reset_turn_resources
 from combat.abilities import Ability, SpellAbility, WeaponAttack
-from combat.class_features import ClassFeature, Resource, reset_resources
+from combat.class_features import (
+    ClassFeature,
+    Resource,
+    apply_defense_fighting_style,
+    reset_resources,
+)
+from combat.damage import DamageType, normalize_character_damage_profile
 
 if TYPE_CHECKING:
     from combat.map import GridMap
@@ -71,6 +77,11 @@ class Character:
     race_name: str | None = None
     race_traits: RaceTraits | None = None
     size: str = "Medium"
+    resistances: set[DamageType] = field(default_factory=set)
+    immunities: set[DamageType] = field(default_factory=set)
+    vulnerabilities: set[DamageType] = field(default_factory=set)
+    fighting_style: str | None = None
+    wearing_armor: bool = False
     weapons: list[WeaponAttack] = field(default_factory=list)
     common_actions: list[str] = field(
         default_factory=lambda: [
@@ -97,6 +108,16 @@ class Character:
     feats: list[object] = field(default_factory=list)
     ability_score_improvements: list[object] = field(default_factory=list)
     resources: dict[str, Resource] = field(default_factory=dict)
+    known_spells: list[SpellAbility] = field(default_factory=list)
+    prepared_spells: list[SpellAbility] = field(default_factory=list)
+    cantrips: list[SpellAbility] = field(default_factory=list)
+    spell_slots: dict[int, int] = field(default_factory=dict)
+    spell_slots_remaining: dict[int, int] = field(default_factory=dict)
+    spellcasting_ability: str | None = None
+    spell_save_dc: int = 0
+    spell_attack_bonus: int = 0
+    spellcasting: bool = False
+    active_concentration_spell: SpellAbility | None = None
     abilities: list[Ability] = field(default_factory=list)
     conditions: list[Condition] = field(default_factory=list)
     action_economy: ActionEconomy = field(default_factory=ActionEconomy)
@@ -107,6 +128,10 @@ class Character:
         self._sync_legacy_abilities()
         self._ensure_progression_features()
         self._ensure_feature_resources()
+        self._ensure_spellcasting_progression()
+        normalize_character_damage_profile(self)
+        apply_defense_fighting_style(self)
+        self._sync_spell_abilities()
         reset_turn_resources(self)
 
     @property
@@ -156,8 +181,24 @@ class Character:
 
     def reset_combat_resources(self) -> None:
         reset_resources(self.resources)
+        from combat.class_features import character_has_class_feature
+        from combat.resources import reset_spell_slots
+
+        if character_has_class_feature(self, "Arcane Recovery"):
+            reset_spell_slots(self)
 
     def reset_start_of_turn_state(self) -> None:
+        temporary_ac_bonus = int(getattr(self, "_temporary_spell_ac_bonus", 0))
+        if temporary_ac_bonus > 0:
+            self.ac = max(0, self.ac - temporary_ac_bonus)
+            self._temporary_spell_ac_bonus = 0
+            source = getattr(self, "_temporary_spell_ac_source", None)
+            if source is not None:
+                self.conditions = [
+                    condition
+                    for condition in self.conditions
+                    if condition.name != source
+                ]
         self.action_economy.dodging_until_start_of_next_turn = False
         self.action_economy.advantage_on_next_check = False
 
@@ -283,6 +324,11 @@ class Character:
             if weapon not in self.abilities:
                 self.abilities.append(weapon)
 
+    def _sync_spell_abilities(self) -> None:
+        for spell in [*self.cantrips, *self.prepared_spells]:
+            if spell not in self.abilities:
+                self.abilities.append(spell)
+
     def _ensure_feature_resources(self) -> None:
         from combat.class_features import feature_resource_name
 
@@ -304,7 +350,6 @@ class Character:
             build_class_features,
             build_class_resources,
             is_spellcaster,
-            spell_slots_for_level,
         )
 
         self.class_features = build_class_features(
@@ -314,10 +359,22 @@ class Character:
         )
         self.resources = build_class_resources(self.class_features, self.resources)
         if is_spellcaster(self):
-            spell_slots = spell_slots_for_level(self.level)
-            self.spellcasting = True
-            self.spell_slots = dict(spell_slots)
-            self.spell_slots_remaining = dict(spell_slots)
+            from combat.spellcasting import configure_spellcasting
+
+            configure_spellcasting(self)
+
+    def _ensure_spellcasting_progression(self) -> None:
+        if self.class_name is None:
+            return
+
+        from rules.progression import is_spellcaster
+
+        if not is_spellcaster(self):
+            return
+
+        from combat.spellcasting import configure_spellcasting
+
+        configure_spellcasting(self)
 
 
 @dataclass

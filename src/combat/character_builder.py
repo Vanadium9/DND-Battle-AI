@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from combat.abilities import WeaponAttack
+from combat.abilities import SpellAbility, WeaponAttack
 from combat.models import Character, Position, Stats, Team
 
 if TYPE_CHECKING:
@@ -31,6 +31,11 @@ class CharacterBuildRequest:
     speed: int = 3
     experience: int = 0
     weapons: tuple[WeaponAttack, ...] = ()
+    fighting_style: str | None = None
+    wearing_armor: bool = False
+    known_spells: tuple[str, ...] = ()
+    prepared_spells: tuple[str, ...] = ()
+    cantrips: tuple[str, ...] = ()
 
 
 def supported_class_options(
@@ -60,6 +65,18 @@ def supported_subclass_options(
         ruleset or get_active_ruleset(),
         level,
     )
+
+
+def supported_spell_options(
+    class_name: str,
+    *,
+    level: int,
+) -> tuple[object, ...]:
+    """Return supported spells that a builder UI/CLI may show."""
+
+    from combat.spellcasting import get_supported_spell_definitions
+
+    return get_supported_spell_definitions(class_name, level)
 
 
 def validate_class_selection(
@@ -104,6 +121,27 @@ def validate_class_selection(
         raise ValueError(active_ruleset.get_unsupported_reason("subclass", reason_name))
 
 
+def validate_spell_selection(
+    class_name: str,
+    *,
+    level: int,
+    known_spells: tuple[str, ...] = (),
+    prepared_spells: tuple[str, ...] = (),
+    cantrips: tuple[str, ...] = (),
+) -> None:
+    """Validate a spell selection for character creation."""
+
+    from combat.spellcasting import validate_spell_selection as validate_spells
+
+    validate_spells(
+        class_name,
+        level,
+        known_spells=known_spells,
+        prepared_spells=prepared_spells,
+        cantrips=cantrips,
+    )
+
+
 def build_character(
     request: CharacterBuildRequest | None = None,
     **kwargs: object,
@@ -115,6 +153,7 @@ def build_character(
     elif kwargs:
         raise ValueError("Pass either CharacterBuildRequest or keyword options, not both.")
 
+    from combat.spellcasting import resolve_spell_list
     from rules.progression import get_proficiency_bonus, sync_character_progression
 
     validate_class_selection(
@@ -122,6 +161,16 @@ def build_character(
         request.subclass_name,
         level=request.level,
     )
+    validate_spell_selection(
+        request.class_name,
+        level=request.level,
+        known_spells=request.known_spells,
+        prepared_spells=request.prepared_spells,
+        cantrips=request.cantrips,
+    )
+    cantrips: list[SpellAbility] = resolve_spell_list(request.cantrips)
+    prepared_spells: list[SpellAbility] = resolve_spell_list(request.prepared_spells)
+    known_spells: list[SpellAbility] = resolve_spell_list(request.known_spells)
     character = Character(
         name=request.name,
         hp=request.hp,
@@ -136,7 +185,12 @@ def build_character(
         level=request.level,
         experience=request.experience,
         proficiency_bonus=get_proficiency_bonus(request.level),
+        fighting_style=request.fighting_style,
+        wearing_armor=request.wearing_armor,
         weapons=list(request.weapons),
+        known_spells=known_spells,
+        prepared_spells=prepared_spells,
+        cantrips=cantrips,
     )
     sync_character_progression(character)
     return character

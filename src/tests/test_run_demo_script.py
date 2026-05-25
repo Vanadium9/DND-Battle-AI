@@ -42,7 +42,8 @@ def test_format_hp_and_describe_action() -> None:
     hp_text = format_hp(environment.combat_state.characters)
     action_text = describe_action(action, environment)
 
-    assert "Fighter Champion Greatsword 34/34" in hp_text
+    assert "Fighter Champion Greatsword 49/49" in hp_text
+    assert "Fighter Archer 44/44" in hp_text
     assert "Orc 18/18" in hp_text
     assert action_text == "MOVE to (1, 1)"
 

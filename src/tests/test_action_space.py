@@ -10,6 +10,7 @@ from agents import (
     decode_action,
 )
 from combat import (
+    ActionSurgeAction,
     AttackAction,
     CombatState,
     EndTurnAction,
@@ -21,6 +22,7 @@ from combat import (
     Orc,
     Position,
     SearchAction,
+    SecondWindAction,
     ShoveAction,
 )
 
@@ -51,6 +53,8 @@ def test_build_action_masks_for_active_actor() -> None:
         "main_action_type",
         "target_index",
         "move_index",
+        "target_cell_index",
+        "direction_index",
         "option_index",
     }
     assert masks["action_category"].dtype == torch.bool
@@ -58,13 +62,16 @@ def test_build_action_masks_for_active_actor() -> None:
     assert masks["main_action_type"].shape == (MAIN_ACTION_TYPE_COUNT,)
     assert masks["target_index"].shape == (len(state.characters),)
     assert masks["move_index"].shape == (64,)
+    assert masks["target_cell_index"].shape == (64,)
+    assert masks["direction_index"].shape == (4,)
     assert masks["option_index"].shape[0] >= 8
 
     assert masks["action_category"][ActionCategory.MAIN_ACTION]
     assert masks["action_category"][ActionCategory.MOVEMENT]
     assert masks["action_category"][ActionCategory.END_TURN]
-    assert not masks["action_category"][ActionCategory.BONUS_ACTION]
+    assert masks["action_category"][ActionCategory.BONUS_ACTION]
     assert not masks["action_category"][ActionCategory.REACTION]
+    assert masks["action_category"][ActionCategory.CLASS_FEATURE]
 
     assert masks["main_action_type"][MainActionType.ATTACK]
     assert masks["main_action_type"][MainActionType.DASH]
@@ -108,6 +115,8 @@ def test_build_action_masks_mask_non_active_actor() -> None:
     assert not masks["main_action_type"].any()
     assert not masks["target_index"].any()
     assert not masks["move_index"].any()
+    assert not masks["target_cell_index"].any()
+    assert not masks["direction_index"].any()
     assert not masks["option_index"].any()
 
 
@@ -159,6 +168,24 @@ def test_decode_action_returns_concrete_combat_actions() -> None:
         state=state,
         actor_id=0,
     )
+    bonus_action = decode_action(
+        ActionCategory.BONUS_ACTION,
+        MainActionType.ATTACK,
+        target_index=0,
+        move_index=0,
+        option_index=0,
+        state=state,
+        actor_id=0,
+    )
+    class_feature_action = decode_action(
+        ActionCategory.CLASS_FEATURE,
+        MainActionType.ATTACK,
+        target_index=0,
+        move_index=0,
+        option_index=0,
+        state=state,
+        actor_id=0,
+    )
 
     assert isinstance(move_action, MoveAction)
     assert move_action.destination == Position(0, 1)
@@ -171,6 +198,8 @@ def test_decode_action_returns_concrete_combat_actions() -> None:
     assert isinstance(shove_action, ShoveAction)
     assert shove_action.shove_effect == "push"
     assert isinstance(end_turn_action, EndTurnAction)
+    assert isinstance(bonus_action, SecondWindAction)
+    assert isinstance(class_feature_action, ActionSurgeAction)
 
 
 def test_decode_action_rejects_masked_components() -> None:
@@ -198,9 +227,22 @@ def test_decode_action_rejects_masked_components() -> None:
             actor_id=0,
         )
 
+    state.characters[0].resources["second_wind"].spend()
     with pytest.raises(ValueError, match="BONUS_ACTION|action_category"):
         decode_action(
             ActionCategory.BONUS_ACTION,
+            MainActionType.ATTACK,
+            target_index=0,
+            move_index=0,
+            option_index=0,
+            state=state,
+            actor_id=0,
+        )
+
+    state.characters[0].resources["action_surge"].spend()
+    with pytest.raises(ValueError, match="CLASS_FEATURE|action_category"):
+        decode_action(
+            ActionCategory.CLASS_FEATURE,
             MainActionType.ATTACK,
             target_index=0,
             move_index=0,

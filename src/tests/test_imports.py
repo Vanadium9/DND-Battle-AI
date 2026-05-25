@@ -20,6 +20,7 @@ from agents import (
 from combat import (
     ActionEconomy,
     ActionResult,
+    ActionSurgeAction,
     Ability,
     AbilityScoreImprovement,
     AttackAction,
@@ -37,7 +38,9 @@ from combat import (
     EndTurnAction,
     Enemy,
     FighterArcher,
+    FighterChampionArcher,
     FighterChampionGreatsword,
+    FighterLevel1Basic,
     Goblin,
     GrappleAction,
     GridMap,
@@ -56,12 +59,15 @@ from combat import (
     RewardConfig,
     Resource,
     SearchAction,
+    SecondWindAction,
     ShoveAction,
     create_test_encounter,
     calculate_combat_reward,
     RaceTraits,
     add_feat,
+    archery_attack_bonus,
     available_implemented_class_features,
+    apply_defense_fighting_style,
     apply_race_traits,
     XP_THRESHOLDS,
     apply_ability_score_improvement,
@@ -70,9 +76,12 @@ from combat import (
     apply_level_up,
     can_choose_asi_or_feat,
     can_level_up,
+    can_use_feature_action,
+    character_has_class_feature,
     character_has_feat,
     build_character,
     feature_resource_name,
+    fighting_style,
     get_active_combat_hooks,
     get_active_feat_definitions,
     get_level_for_xp,
@@ -94,11 +103,14 @@ from combat import (
     opposing_team,
     snapshot_combat_state,
     sync_character_progression,
+    should_use_great_weapon_fighting,
+    spend_feature_resource,
     Team,
     use_halfling_lucky,
     UseObjectAction,
     WeaponAttack,
     weapon_is_racially_proficient,
+    weapon_attack_count_for_attack_action,
     supported_class_options,
     supported_subclass_options,
     validate_class_selection,
@@ -117,7 +129,10 @@ from rules import (
     COMBAT_HOOK_NAMES,
     CLASS_DEFINITIONS,
     FEAT_DEFINITIONS,
+    FIGHTER_DEFINITION,
+    FIGHTING_STYLE_OPTIONS,
     GRAPPLER_NAME,
+    CHAMPION_DEFINITION,
     ClassDefinition,
     FeatDefinition,
     MAX_SUPPORTED_LEVEL,
@@ -166,6 +181,7 @@ def test_project_imports() -> None:
     assert encode_observation is not None
     assert ActionEconomy is not None
     assert ActionResult is not None
+    assert ActionSurgeAction is not None
     assert AttackAction is not None
     assert CastSpellAction is not None
     assert CombatAction is not None
@@ -182,7 +198,9 @@ def test_project_imports() -> None:
     assert DodgeAction is not None
     assert Enemy is not None
     assert FighterArcher is not None
+    assert FighterChampionArcher is not None
     assert FighterChampionGreatsword is not None
+    assert FighterLevel1Basic is not None
     assert Goblin is not None
     assert GrappleAction is not None
     assert HelpAction is not None
@@ -201,6 +219,7 @@ def test_project_imports() -> None:
     assert RewardConfig is not None
     assert Resource is not None
     assert SearchAction is not None
+    assert SecondWindAction is not None
     assert ShoveAction is not None
     assert SpellAbility is not None
     assert StabilizeAction is not None
@@ -211,7 +230,9 @@ def test_project_imports() -> None:
     assert create_test_encounter is not None
     assert RaceTraits is not None
     assert add_feat is not None
+    assert archery_attack_bonus is not None
     assert available_implemented_class_features is not None
+    assert apply_defense_fighting_style is not None
     assert apply_race_traits is not None
     assert XP_THRESHOLDS is not None
     assert apply_ability_score_improvement is not None
@@ -220,9 +241,12 @@ def test_project_imports() -> None:
     assert apply_level_up is not None
     assert can_choose_asi_or_feat is not None
     assert can_level_up is not None
+    assert can_use_feature_action is not None
+    assert character_has_class_feature is not None
     assert character_has_feat is not None
     assert build_character is not None
     assert feature_resource_name is not None
+    assert fighting_style is not None
     assert get_active_combat_hooks is not None
     assert get_active_feat_definitions is not None
     assert get_level_for_xp is not None
@@ -240,10 +264,13 @@ def test_project_imports() -> None:
     assert reset_turn_resources is not None
     assert snapshot_combat_state is not None
     assert sync_character_progression is not None
+    assert should_use_great_weapon_fighting is not None
+    assert spend_feature_resource is not None
     assert Team is not None
     assert use_halfling_lucky is not None
     assert UseObjectAction is not None
     assert weapon_is_racially_proficient is not None
+    assert weapon_attack_count_for_attack_action is not None
     assert supported_class_options is not None
     assert supported_subclass_options is not None
     assert validate_class_selection is not None
@@ -260,7 +287,10 @@ def test_project_imports() -> None:
     assert COMBAT_HOOK_NAMES is not None
     assert CLASS_DEFINITIONS is not None
     assert FEAT_DEFINITIONS is not None
+    assert FIGHTER_DEFINITION is not None
+    assert FIGHTING_STYLE_OPTIONS is not None
     assert GRAPPLER_NAME is not None
+    assert CHAMPION_DEFINITION is not None
     assert ClassDefinition is not None
     assert FeatDefinition is not None
     assert MAX_SUPPORTED_LEVEL is not None

@@ -6,6 +6,11 @@ from dataclasses import dataclass
 from typing import Any
 
 
+FIGHTING_STYLE_ARCHERY = "Archery"
+FIGHTING_STYLE_DEFENSE = "Defense"
+FIGHTING_STYLE_GREAT_WEAPON_FIGHTING = "Great Weapon Fighting"
+
+
 @dataclass
 class Resource:
     """A finite class or creature resource."""
@@ -138,3 +143,136 @@ def implemented_feature_active_actions(
             continue
         actions.append(feature.active_action)
     return tuple(actions)
+
+
+def character_has_class_feature(character: Any, feature_name: str) -> bool:
+    """Return True if the character has an implemented feature by name."""
+
+    feature_key = _lookup_key(feature_name)
+    return any(
+        _lookup_key(feature.name) == feature_key
+        for feature in implemented_class_features(character)
+    )
+
+
+def available_feature_for_active_action(
+    character: Any,
+    active_action: str,
+    action_cost: str | None = None,
+) -> FeatureDefinition | None:
+    """Return the available implemented feature exposing an active action."""
+
+    action_key = _lookup_key(active_action)
+    for feature in available_implemented_class_features(character):
+        if feature.active_action is None:
+            continue
+        if _lookup_key(feature.active_action) != action_key:
+            continue
+        if action_cost is not None and feature.action_cost != action_cost:
+            continue
+        return feature
+    return None
+
+
+def can_use_feature_action(
+    character: Any,
+    active_action: str,
+    action_cost: str | None = None,
+) -> bool:
+    """Return True if an active class feature is currently available."""
+
+    return available_feature_for_active_action(
+        character,
+        active_action,
+        action_cost,
+    ) is not None
+
+
+def spend_feature_resource(character: Any, active_action: str) -> bool:
+    """Spend the resource attached to an active feature if one exists."""
+
+    feature = available_feature_for_active_action(character, active_action)
+    if feature is None:
+        return False
+    resource_name = feature_resource_name(feature)
+    if resource_name is None:
+        return True
+    resource = getattr(character, "resources", {}).get(resource_name)
+    if resource is None or not resource.available:
+        return False
+    resource.spend()
+    return True
+
+
+def fighting_style(character: Any) -> str | None:
+    """Return the selected fighting style if the character has Fighting Style."""
+
+    if not character_has_class_feature(character, "Fighting Style"):
+        return None
+    style = getattr(character, "fighting_style", None)
+    if style is None:
+        return None
+    normalized = _lookup_key(style)
+    for option in (
+        FIGHTING_STYLE_ARCHERY,
+        FIGHTING_STYLE_DEFENSE,
+        FIGHTING_STYLE_GREAT_WEAPON_FIGHTING,
+    ):
+        if _lookup_key(option) == normalized:
+            return option
+    return None
+
+
+def archery_attack_bonus(character: Any, weapon: Any) -> int:
+    """Return the Archery fighting style attack bonus for ranged weapons."""
+
+    if fighting_style(character) != FIGHTING_STYLE_ARCHERY:
+        return 0
+    if int(getattr(weapon, "range", 0)) <= 1:
+        return 0
+    return 2
+
+
+def apply_defense_fighting_style(character: Any) -> None:
+    """Apply Defense fighting style AC bonus once when armor is worn."""
+
+    if fighting_style(character) != FIGHTING_STYLE_DEFENSE:
+        return
+    if not bool(getattr(character, "wearing_armor", False)):
+        return
+    if bool(getattr(character, "_defense_fighting_style_applied", False)):
+        return
+    character.ac += 1
+    character._defense_fighting_style_applied = True
+
+
+def should_use_great_weapon_fighting(character: Any, weapon: Any) -> bool:
+    """Return True when low weapon damage dice should be rerolled once."""
+
+    if fighting_style(character) != FIGHTING_STYLE_GREAT_WEAPON_FIGHTING:
+        return False
+    return bool(
+        getattr(weapon, "two_handed", False)
+        or getattr(weapon, "heavy", False)
+        or getattr(weapon, "versatile_two_handed", False)
+    )
+
+
+def critical_hit_threshold(character: Any) -> int:
+    """Return the natural d20 value that starts a critical hit."""
+
+    if character_has_class_feature(character, "Improved Critical"):
+        return 19
+    return 21
+
+
+def weapon_attack_count_for_attack_action(character: Any) -> int:
+    """Return weapon attacks made inside one common Attack action."""
+
+    if character_has_class_feature(character, "Extra Attack"):
+        return 2
+    return 1
+
+
+def _lookup_key(value: object) -> str:
+    return "".join(character for character in str(value).casefold() if character.isalnum())

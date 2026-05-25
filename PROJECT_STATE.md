@@ -1027,3 +1027,363 @@ Cover:
 - FULL_COVER запрещает ranged attack
 - HALF_COVER добавляет AC bonus
 - Hide маскируется без укрытия
+
+## 32. Запрос: Реализуй Fighter уровней 1-5 по progression table
+
+Файлы:
+- src/rules/classes/fighter.py
+- src/rules/subclasses/champion.py
+- src/combat/class_features.py
+- src/combat/presets.py
+
+Fighter progression:
+- Level 1:
+  - Fighting Style
+  - Second Wind
+- Level 2:
+  - Action Surge
+- Level 3:
+  - Martial Archetype: Champion
+  - Champion feature: Improved Critical
+- Level 4:
+  - Ability Score Improvement
+- Level 5:
+  - Extra Attack
+
+Реализовать Fighting Style:
+- Archery
+- Defense
+- Great Weapon Fighting
+
+Реализовать:
+- Second Wind:
+  - bonus action
+  - 1 раз за бой
+  - self-heal
+- Action Surge:
+  - 1 раз за бой
+  - восстанавливает action_available
+- Improved Critical:
+  - critical hit on 19-20
+- Extra Attack:
+  - две weapon attacks внутри одного Attack action
+- Defense:
+  - +1 AC, если персонаж носит armor
+- Archery:
+  - бонус к ranged weapon attack
+- Great Weapon Fighting:
+  - reroll низкого damage die для двуручного оружия
+
+Важно:
+- Attack остаётся common action
+- Fighter features только модифицируют common action или добавляют resource activation
+- action masks должны учитывать уровень, subclass и доступность ресурсов
+- character builder должен уметь создать Fighter 1-5 уровня и выбрать Champion на 3 уровне
+
+Добавь presets:
+- FighterChampionGreatsword level 5
+- FighterChampionArcher level 5
+- FighterLevel1Basic level 1
+
+Добавь тесты всех features.
+
+## 33. Запрос: Реализуй универсальную систему spellcasting progression для уровней 1-5
+
+Файлы:
+- src/rules/spellcasting_progression.py
+- src/combat/spellcasting.py
+- src/combat/resources.py
+
+Требования:
+- поддержать cantrips и spell slots уровней 1-3
+- spell slots зависят от class level и spellcasting type
+- для MVP реализовать:
+  - full caster progression для Cleric и Wizard уровней 1-5
+
+Character должен иметь:
+- known_spells
+- prepared_spells
+- cantrips
+- spell_slots
+- spellcasting_ability
+- spell_save_dc
+- spell_attack_bonus
+
+Формулы:
+- spell_save_dc = 8 + proficiency_bonus + spellcasting ability modifier
+- spell_attack_bonus = proficiency_bonus + spellcasting ability modifier
+
+Требования к подготовке заклинаний:
+- для MVP можно хранить fixed prepared_spells
+- архитектура должна позволять позже выбирать prepared spells
+- action masks должны показывать только prepared spells
+- cantrips не тратят spell slots
+- level 1+ spells тратят spell slots
+- upcast поддержать инфраструктурно
+- для MVP upcast реализовать только для healing/damage spells
+
+Character builder:
+- должен показывать только поддержанные заклинания
+- должен запрещать выбирать spell level выше доступного персонажу
+- должен валидировать prepared_spells
+
+Добавь тесты:
+- Wizard level 5 имеет spell slots до 3 уровня
+- Cleric level 3 имеет spell slots до 2 уровня
+- cantrip не тратит slot
+- spell level 3 нельзя кастовать без slot 3 уровня
+
+## 34. Запрос: Реализуй Cleric уровней 1-5 с Life Domain
+
+Файлы:
+- src/rules/classes/cleric.py
+- src/rules/subclasses/life_domain.py
+- src/combat/spells/cleric_spells.py
+- src/combat/presets.py
+
+Cleric progression:
+- Level 1:
+  - Spellcasting
+  - Divine Domain: Life Domain
+- Level 2:
+  - Channel Divinity
+- Level 3:
+  - spell slots 2 уровня
+- Level 4:
+  - Ability Score Improvement
+- Level 5:
+  - spell slots 3 уровня
+
+Для MVP реализовать:
+- Spellcasting через prepared_spells
+- Life Domain как subclass
+- Channel Divinity resource
+- Channel Divinity: Preserve Life как healing action
+- Turn Undead сделать stub/not_implemented, если undead system ещё нет
+
+Заклинания:
+- Sacred Flame — cantrip
+- Cure Wounds — level 1
+- Healing Word — level 1, bonus action
+- Guiding Bolt — level 1
+- Bless — concentration buff, можно stub или простую реализацию
+- Spiritual Weapon пока не реализовывать
+- Revivify пока не реализовывать
+
+Требования:
+- Mace Attack использует common Attack
+- Cleric spellcasting ability = WIS
+- Cure Wounds требует action
+- Healing Word требует bonus_action
+- Guiding Bolt требует action
+- Sacred Flame требует action и WIS/DEX save по выбранной реализации
+- action masks должны учитывать:
+  - prepared spell
+  - spell slot
+  - action economy
+  - валидную цель
+  - range
+  - line of sight
+  - cover, если применимо
+- healing spells должны быть замаскированы, если нет раненых союзников и сам Cleric не ранен
+
+Character builder:
+- должен уметь создать Cleric 1-5 уровня
+- должен позволять выбрать Life Domain
+- должен показывать только поддержанные cleric spells
+
+Добавь preset:
+- ClericLifeSupport level 5
+
+Добавь тесты:
+- Healing Word тратит bonus action
+- Cure Wounds тратит action
+- spell slots тратятся
+- Channel Divinity тратит resource
+- Cleric level 1 не имеет Channel Divinity
+
+## 35. Запрос: Реализуй Wizard уровней 1-5 с School of Evocation
+
+Файлы:
+- src/rules/classes/wizard.py
+- src/rules/subclasses/evocation.py
+- src/combat/spells/wizard_spells.py
+- src/combat/presets.py
+
+Wizard progression:
+- Level 1:
+  - Spellcasting
+  - Arcane Recovery
+- Level 2:
+  - Arcane Tradition: School of Evocation
+  - Evocation feature: Sculpt Spells
+- Level 3:
+  - spell slots 2 уровня
+- Level 4:
+  - Ability Score Improvement
+- Level 5:
+  - spell slots 3 уровня
+
+Для MVP реализовать:
+- spellbook как список known_spells
+- prepared_spells как фиксированный список
+- Arcane Recovery:
+  - восстанавливает часть spell slots после боя или short rest
+  - для MVP можно сделать reset между боями
+- Sculpt Spells:
+  - союзники могут быть исключены из AoE Evocation spells
+  - работает для Fireball и Burning Hands
+
+Заклинания:
+- Fire Bolt — cantrip
+- Ray of Frost — cantrip optional
+- Magic Missile — level 1
+- Shield — reaction, AC bonus до начала следующего хода
+- Burning Hands — level 1, cone AoE
+- Scorching Ray — level 2 optional
+- Fireball — level 3, radius AoE
+
+Требования:
+- Quarterstaff Attack использует common Attack
+- Wizard spellcasting ability = INT
+- Fireball доступен только Wizard level 5+
+- action masks должны учитывать:
+  - prepared spell
+  - spell slot
+  - action economy
+  - range
+  - line of sight
+  - cover
+  - AoE target
+  - наличие врагов в зоне
+  - friendly fire и Sculpt Spells
+
+Character builder:
+- должен уметь создать Wizard 1-5 уровня
+- должен позволять выбрать School of Evocation
+- должен показывать только поддержанные wizard spells
+
+Добавь preset:
+- WizardEvoker level 5
+
+Добавь тесты:
+- Wizard level 1 не может кастовать Fireball
+- Wizard level 5 может кастовать Fireball при наличии slot 3
+- Shield тратит reaction
+- Sculpt Spells защищает союзника от Fireball/Burning Hands
+
+## 36. Запрос: Добавь поддержку AoE targeting для заклинаний и предметов
+
+Файлы:
+- src/combat/aoe.py
+- src/combat/spellcasting.py
+- src/combat/items.py
+- src/agents/action_space.py
+
+Реализуй формы:
+- RADIUS
+- CONE
+- LINE
+
+Для плана минимум:
+- radius по клеткам Manhattan или Chebyshev distance
+- cone можно упростить до направления:
+  - UP
+  - DOWN
+  - LEFT
+  - RIGHT
+- line — прямая линия по направлению
+
+Требования:
+- Fireball использует RADIUS
+- Burning Hands использует CONE
+- AoE должен находить всех затронутых существ
+- friendly fire должен быть включен
+- Sculpt Spells может исключать союзников из Evocation AoE
+- cover может давать бонус к DEX save против AoE, если это поддерживается текущей реализацией
+- action mask должен позволять выбирать target_cell или direction
+- reward должен учитывать урон по союзникам как штраф
+
+Добавь логирование всех затронутых целей.
+Добавь тесты AoE.
+
+## 37. Запрос: Добавь упрощённую систему concentration
+
+Файлы:
+- src/combat/spellcasting.py
+- src/combat/conditions.py
+
+Требования:
+- SpellAbility может иметь concentration=True
+- у персонажа может быть active_concentration_spell
+- при касте нового concentration spell старый сбрасывается
+- при получении урона персонаж делает CON save:
+  - DC = max(10, damage / 2)
+- при провале concentration сбрасывается
+- логировать начало, замену и потерю концентрации
+
+Для MVP:
+- Bless может использовать concentration
+- если Bless реализован как stub, концентрационная инфраструктура всё равно должна быть готова
+
+Добавь тесты:
+- concentration spell устанавливает active_concentration_spell
+- новый concentration spell заменяет старый
+- урон вызывает CON save
+- провал CON save сбрасывает концентрацию
+
+## 38. Запрос: Добавь систему типов урона, сопротивлений, иммунитетов и уязвимостей
+
+Файлы:
+- src/combat/damage.py
+- src/combat/entities.py
+- src/combat/spellcasting.py
+- src/combat/actions.py
+
+DamageType enum:
+- SLASHING
+- PIERCING
+- BLUDGEONING
+- FIRE
+- COLD
+- LIGHTNING
+- ACID
+- POISON
+- NECROTIC
+- RADIANT
+- FORCE
+- PSYCHIC
+- THUNDER
+
+У персонажа/врага должны быть:
+- resistances: set[DamageType]
+- immunities: set[DamageType]
+- vulnerabilities: set[DamageType]
+
+Правила:
+- immunity = 0 урона
+- resistance = половина урона
+- vulnerability = двойной урон
+- порядок:
+  1. базовый урон
+  2. модификаторы spell/weapon
+  3. resistance/immunity/vulnerability
+
+Обнови:
+- WeaponAttack
+- SpellAbility
+- ItemEffect
+чтобы они имели damage_type.
+
+Добавь в observation признаки:
+- основные immunities/resistances/vulnerabilities цели
+- damage_type доступных действий, если возможно
+
+Добавь тестового врага FireElementalSimple:
+- immunity FIRE
+- resistance SLASHING, PIERCING, BLUDGEONING
+
+Добавь тесты:
+- fire immunity обнуляет Fireball damage
+- resistance делит урон
+- vulnerability удваивает урон

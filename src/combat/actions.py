@@ -19,8 +19,10 @@ from combat.common_actions import (
     COMMON_ACTION_STABILIZE,
     COMMON_ACTION_USE_OBJECT,
     ActionResult,
+    ActionSurgeAction,
     AttackAction,
     CastSpellAction,
+    ChannelDivinityPreserveLifeAction,
     CombatAction,
     DashAction,
     DisengageAction,
@@ -34,9 +36,16 @@ from combat.common_actions import (
     OpportunityAttackAction,
     ReadyAction,
     SearchAction,
+    SecondWindAction,
     ShoveAction,
     StabilizeAction,
     UseObjectAction,
+)
+from combat.damage import (
+    DAMAGE_TYPES,
+    DamageType,
+    apply_damage_modifiers,
+    coerce_damage_type,
 )
 
 __all__ = [
@@ -58,8 +67,10 @@ __all__ = [
     "COMMON_ACTION_STABILIZE",
     "COMMON_ACTION_USE_OBJECT",
     "ActionResult",
+    "ActionSurgeAction",
     "AttackAction",
     "CastSpellAction",
+    "ChannelDivinityPreserveLifeAction",
     "CombatAction",
     "DashAction",
     "DisengageAction",
@@ -73,7 +84,12 @@ __all__ = [
     "OpportunityAttackAction",
     "ReadyAction",
     "SearchAction",
+    "SecondWindAction",
     "ShoveAction",
     "StabilizeAction",
     "UseObjectAction",
+    "DAMAGE_TYPES",
+    "DamageType",
+    "apply_damage_modifiers",
+    "coerce_damage_type",
 ]

@@ -6,21 +6,54 @@ from dataclasses import dataclass
 import random
 import re
 
-from combat.abilities import SpellAbility, WeaponAttack
+from combat.aoe import (
+    AoEDirection,
+    AoEShape,
+    AoETargeting,
+    affected_creatures,
+    coerce_aoe_direction,
+    coerce_aoe_shape,
+    direction_from_positions,
+    log_affected_targets,
+    positions_for_aoe,
+)
+from combat.abilities import SpellAbility, WeaponAttack, ability_modifier
 from combat.checks import (
     ContestedCheckResult,
     passive_perception,
     roll_ability_check,
     roll_contested_check,
 )
-from combat.cover import CoverType, apply_cover_to_ac
+from combat.class_features import (
+    archery_attack_bonus,
+    can_use_feature_action,
+    character_has_class_feature,
+    critical_hit_threshold,
+    should_use_great_weapon_fighting,
+    spend_feature_resource,
+    weapon_attack_count_for_attack_action,
+)
+from combat.cover import CoverType, apply_cover_to_ac, apply_cover_to_dex_save
+from combat.conditions import handle_concentration_damage
+from combat.damage import apply_damage_modifiers
 from combat.features import (
     attack_roll_advantage_state,
     on_attack_roll,
     on_damage_roll,
 )
-from combat.models import Character, CombatState, Position
-from combat.race_traits import apply_damage_resistance, use_halfling_lucky
+from combat.items import CombatItem, resolve_item, supported_item_aoe_shape
+from combat.models import Character, CombatState, Condition, Position
+from combat.race_traits import use_halfling_lucky
+from combat.spellcasting import (
+    available_castable_spells,
+    begin_spell_concentration,
+    can_cast_spell,
+    can_target_spell as can_target_spell_with_rules,
+    spell_cast_level,
+    spell_has_aoe,
+    spell_aoe_shape,
+    spend_spell_resources,
+)
 
 
 COMMON_ACTION_MOVE = "move"
@@ -158,39 +191,55 @@ class AttackAction(CombatAction):
             )
 
         actor.action_economy.spend_action()
-        d20_roll = _attack_roll(actor, target, combat_state)
-        attack_modifier = weapon.attack_modifier(actor)
-        cover = _cover_between(combat_state, actor.position, target.position)
-        effective_ac = apply_cover_to_ac(target.ac, cover)
-        attack_total = d20_roll + attack_modifier
-        if attack_total < effective_ac:
-            return ActionResult(
-                True,
+        attack_count = weapon_attack_count_for_attack_action(actor)
+        attack_summaries: list[str] = []
+        total_damage = 0
+
+        for attack_number in range(1, attack_count + 1):
+            if target.is_dead:
+                attack_summaries.append(f"attack {attack_number}: target already defeated")
+                break
+
+            d20_roll = _attack_roll(actor, target, combat_state)
+            attack_modifier = _weapon_attack_modifier(actor, weapon)
+            cover = _cover_between(combat_state, actor.position, target.position)
+            effective_ac = apply_cover_to_ac(target.ac, cover)
+            attack_total = d20_roll + attack_modifier
+            critical = d20_roll >= critical_hit_threshold(actor)
+            hit = d20_roll == 20 or attack_total >= effective_ac
+            if not hit:
+                attack_summaries.append(
+                    (
+                        f"attack {attack_number}: miss ({attack_total} vs AC "
+                        f"{effective_ac}; d20={d20_roll}, modifier={attack_modifier})"
+                    )
+                )
+                continue
+
+            raw_damage = on_damage_roll(
+                actor,
+                _roll_weapon_damage(actor, weapon, critical=critical),
+                target=target,
+                weapon=weapon,
+                combat_state=combat_state,
+            )
+            damage = apply_damage_modifiers(target, raw_damage, weapon.damage_type)
+            _apply_damage_to_character(target, damage)
+            total_damage += damage
+            outcome_text = "critical hit" if critical else "hit"
+            attack_summaries.append(
                 (
-                    f"{actor.name} attacks {target.name} with {weapon.name}: "
-                    f"miss ({attack_total} vs AC {effective_ac}; "
-                    f"d20={d20_roll}, modifier={attack_modifier}). "
-                    "Action spent: action_available=False."
-                ),
+                    f"attack {attack_number}: {outcome_text} "
+                    f"({attack_total} vs AC {effective_ac}; d20={d20_roll}, "
+                    f"modifier={attack_modifier}) for {damage} damage"
+                )
             )
 
-        raw_damage = on_damage_roll(
-            actor,
-            max(0, _roll_damage(weapon.damage) + weapon.damage_modifier(actor)),
-            target=target,
-            weapon=weapon,
-            combat_state=combat_state,
-        )
-        damage = apply_damage_resistance(target, raw_damage, weapon.damage_type)
-        target.hp = max(0, target.hp - damage)
-        if target.hp > 0:
-            target.stable = False
         return ActionResult(
             True,
             (
                 f"{actor.name} attacks {target.name} with {weapon.name}: "
-                f"hit ({attack_total} vs AC {effective_ac}; "
-                f"d20={d20_roll}, modifier={attack_modifier}) for {damage} damage. "
+                f"{'; '.join(attack_summaries)}. Total damage: {total_damage}. "
                 "Action spent: action_available=False."
             ),
         )
@@ -253,11 +302,13 @@ class OpportunityAttackAction(CombatAction):
 
         actor.action_economy.spend_reaction()
         d20_roll = _attack_roll(actor, target, combat_state)
-        attack_modifier = weapon.attack_modifier(actor)
+        attack_modifier = _weapon_attack_modifier(actor, weapon)
         cover = _cover_between(combat_state, actor.position, target.position)
         effective_ac = apply_cover_to_ac(target.ac, cover)
         attack_total = d20_roll + attack_modifier
-        if attack_total < effective_ac:
+        critical = d20_roll >= critical_hit_threshold(actor)
+        hit = d20_roll == 20 or attack_total >= effective_ac
+        if not hit:
             return ActionResult(
                 True,
                 (
@@ -270,20 +321,18 @@ class OpportunityAttackAction(CombatAction):
 
         raw_damage = on_damage_roll(
             actor,
-            max(0, _roll_damage(weapon.damage) + weapon.damage_modifier(actor)),
+            _roll_weapon_damage(actor, weapon, critical=critical),
             target=target,
             weapon=weapon,
             combat_state=combat_state,
         )
-        damage = apply_damage_resistance(target, raw_damage, weapon.damage_type)
-        target.hp = max(0, target.hp - damage)
-        if target.hp > 0:
-            target.stable = False
+        damage = apply_damage_modifiers(target, raw_damage, weapon.damage_type)
+        _apply_damage_to_character(target, damage)
         return ActionResult(
             True,
             (
                 f"{actor.name} opportunity attacks {target.name} with {weapon.name}: "
-                f"hit ({attack_total} vs AC {effective_ac}; "
+                f"{'critical hit' if critical else 'hit'} ({attack_total} vs AC {effective_ac}; "
                 f"d20={d20_roll}, modifier={attack_modifier}) for {damage} damage. "
                 "Reaction spent: reaction_available=False."
             ),
@@ -308,6 +357,9 @@ class CastSpellAction(CombatAction):
 
     spell: SpellAbility | None = None
     target_id: int | None = None
+    target_cell: Position | None = None
+    direction: AoEDirection | str | int | None = None
+    cast_level: int | None = None
 
     def is_valid(self, combat_state: CombatState) -> bool:
         actor = _get_character(combat_state, self.actor_id)
@@ -316,10 +368,14 @@ class CastSpellAction(CombatAction):
             return False
         if COMMON_ACTION_CAST_SPELL not in actor.common_actions:
             return False
-        if not actor.action_economy.action_available or not spell.available:
+        if not spell.available or not _can_spend_spell_action(actor, spell):
             return False
+        if not can_cast_spell(actor, spell, self.cast_level):
+            return False
+        if spell_has_aoe(spell):
+            return self._aoe_targeting_for_spell(combat_state, actor, spell) is not None
         target = self._target_for_spell(combat_state, actor, spell)
-        return spell.damage is None or target is not None
+        return spell.damage is None and spell.healing is None or target is not None
 
     def execute(self, combat_state: CombatState) -> ActionResult:
         actor = _get_character(combat_state, self.actor_id)
@@ -331,45 +387,162 @@ class CastSpellAction(CombatAction):
         if not self.is_valid(combat_state):
             return ActionResult(False, f"{actor.name} cannot cast {spell.name}.")
 
-        actor.action_economy.spend_action()
+        _spend_spell_action(actor, spell)
         target = self._target_for_spell(combat_state, actor, spell)
-        if spell.damage is not None and target is not None:
+        casting_level = spell_cast_level(spell, self.cast_level)
+        if spell.ac_bonus > 0:
+            _apply_temporary_ac_spell(actor, spell)
+            spend_spell_resources(actor, spell, casting_level)
+            begin_spell_concentration(actor, spell)
+            spent_text = _spell_action_spent_text(spell)
+            return ActionResult(
+                True,
+                (
+                    f"{actor.name} casts {spell.name} at level {casting_level} "
+                    f"and gains +{spell.ac_bonus} AC until the start of their next turn. "
+                    f"{spent_text}"
+                ),
+            )
+        if spell.damage is not None:
+            if spell_has_aoe(spell):
+                targeting = self._aoe_targeting_for_spell(combat_state, actor, spell)
+                if targeting is None:
+                    return ActionResult(False, f"{actor.name} cannot place {spell.name}.")
+                return _execute_area_damage_spell(
+                    combat_state,
+                    actor,
+                    spell,
+                    casting_level,
+                    targeting,
+                )
+            if target is None:
+                return ActionResult(False, f"{actor.name} cannot target {spell.name}.")
+            raw_damage = _roll_spell_effect(
+                spell.damage,
+                spell.upcast_damage_per_level,
+                spell.spell_level,
+                casting_level,
+            )
+            saved = _target_saves_against_spell(actor, target, spell, combat_state)
+            if saved:
+                raw_damage = raw_damage // 2 if spell.save_half_damage else 0
             raw_damage = on_damage_roll(
                 actor,
-                _roll_damage(spell.damage),
+                raw_damage,
                 target=target,
                 spell=spell,
                 combat_state=combat_state,
             )
-            damage = apply_damage_resistance(
+            damage = apply_damage_modifiers(
                 target,
                 raw_damage,
                 spell.damage_type,
             )
-            target.hp = max(0, target.hp - damage)
+            _apply_damage_to_character(target, damage)
+            spend_spell_resources(actor, spell, casting_level)
+            begin_spell_concentration(actor, spell)
+            save_text = " after save" if saved else ""
+            spent_text = _spell_action_spent_text(spell)
             return ActionResult(
                 True,
                 (
                     f"{actor.name} casts {spell.name} on {target.name} "
-                    f"for {damage} damage. Action spent: action_available=False."
+                    f"at level {casting_level} for {damage} damage{save_text}. "
+                    f"{spent_text}"
                 ),
             )
+        if spell.healing is not None and target is not None:
+            healing = _roll_spell_effect(
+                spell.healing,
+                spell.upcast_healing_per_level,
+                spell.spell_level,
+                casting_level,
+            )
+            before_hp = target.hp
+            target.hp = min(target.max_hp, target.hp + healing)
+            if target.hp > 0:
+                target.stable = True
+            spend_spell_resources(actor, spell, casting_level)
+            begin_spell_concentration(actor, spell)
+            spent_text = _spell_action_spent_text(spell)
+            return ActionResult(
+                True,
+                (
+                    f"{actor.name} casts {spell.name} on {target.name} "
+                    f"at level {casting_level} and heals {target.hp - before_hp} HP. "
+                    f"{spent_text}"
+                ),
+            )
+        spend_spell_resources(actor, spell, casting_level)
+        begin_spell_concentration(actor, spell)
+        spent_text = _spell_action_spent_text(spell)
         return ActionResult(
             True,
-            f"{actor.name} casts {spell.name}. Action spent: action_available=False.",
+            (
+                f"{actor.name} casts {spell.name} at level {casting_level}. "
+                f"{spent_text}"
+            ),
         )
 
     def _resolve_spell(self, actor: Character | None) -> SpellAbility | None:
         if actor is None:
             return None
         if self.spell is not None:
-            if self.spell in actor.abilities:
+            if (
+                self.spell in actor.abilities
+                or self.spell in actor.cantrips
+                or self.spell in actor.prepared_spells
+            ) and can_cast_spell(actor, self.spell, self.cast_level):
                 return self.spell
             return None
-        for ability in actor.available_abilities:
-            if isinstance(ability, SpellAbility):
-                return ability
+        for spell in available_castable_spells(actor):
+            return spell
         return None
+
+    def _aoe_targeting_for_spell(
+        self,
+        combat_state: CombatState,
+        actor: Character,
+        spell: SpellAbility,
+    ) -> AoETargeting | None:
+        shape = spell_aoe_shape(spell)
+        if shape is None:
+            return None
+        if shape is AoEShape.RADIUS:
+            target_cell = self.target_cell
+            if target_cell is None:
+                target = self._target_for_spell(combat_state, actor, spell)
+                target_cell = target.position if target is not None else None
+            if target_cell is None:
+                return None
+            if not _can_place_target_cell_aoe(combat_state, actor, target_cell, spell.range):
+                return None
+            targeting = AoETargeting(
+                shape=shape,
+                origin=actor.position,
+                size=spell.area_size,
+                target_cell=target_cell,
+            )
+            if not _aoe_has_affected_creature(combat_state, targeting):
+                return None
+            return targeting
+
+        direction = coerce_aoe_direction(self.direction)
+        if direction is None:
+            target = self._target_for_spell(combat_state, actor, spell)
+            if target is not None:
+                direction = direction_from_positions(actor.position, target.position)
+        if direction is None:
+            return None
+        targeting = AoETargeting(
+            shape=shape,
+            origin=actor.position,
+            size=spell.area_size,
+            direction=direction,
+        )
+        if not _aoe_has_affected_creature(combat_state, targeting):
+            return None
+        return targeting
 
     def _target_for_spell(
         self,
@@ -385,7 +558,142 @@ class CastSpellAction(CombatAction):
         for target in combat_state.characters:
             if _can_target_spell(combat_state, actor, target, spell):
                 return target
+        if spell.healing is not None and _can_target_spell(combat_state, actor, actor, spell):
+            return actor
         return None
+
+
+@dataclass
+class SecondWindAction(CombatAction):
+    """Use the Fighter Second Wind bonus action."""
+
+    def is_valid(self, combat_state: CombatState) -> bool:
+        actor = _get_character(combat_state, self.actor_id)
+        return (
+            actor is not None
+            and actor.can_take_turn
+            and actor.action_economy.bonus_action_available
+            and can_use_feature_action(actor, "second_wind", "bonus_action")
+        )
+
+    def execute(self, combat_state: CombatState) -> ActionResult:
+        actor = _get_character(combat_state, self.actor_id)
+        if actor is None:
+            return ActionResult(False, f"Second Wind failed: actor {self.actor_id} not found.")
+        if not self.is_valid(combat_state):
+            return ActionResult(False, f"{actor.name} cannot use Second Wind.")
+
+        healing = random.randint(1, 10) + max(1, int(getattr(actor, "level", 1)))
+        before_hp = actor.hp
+        actor.hp = min(actor.max_hp, actor.hp + healing)
+        actor.stable = actor.hp > 0
+        actor.action_economy.spend_bonus_action()
+        spend_feature_resource(actor, "second_wind")
+        return ActionResult(
+            True,
+            (
+                f"{actor.name} uses Second Wind and heals {actor.hp - before_hp} HP "
+                f"(rolled {healing}). "
+                "Bonus action spent: bonus_action_available=False."
+            ),
+        )
+
+
+@dataclass
+class ActionSurgeAction(CombatAction):
+    """Use the Fighter Action Surge resource to restore the main action."""
+
+    def is_valid(self, combat_state: CombatState) -> bool:
+        actor = _get_character(combat_state, self.actor_id)
+        return (
+            actor is not None
+            and actor.can_take_turn
+            and can_use_feature_action(actor, "action_surge")
+        )
+
+    def execute(self, combat_state: CombatState) -> ActionResult:
+        actor = _get_character(combat_state, self.actor_id)
+        if actor is None:
+            return ActionResult(False, f"Action Surge failed: actor {self.actor_id} not found.")
+        if not self.is_valid(combat_state):
+            return ActionResult(False, f"{actor.name} cannot use Action Surge.")
+
+        if not spend_feature_resource(actor, "action_surge"):
+            return ActionResult(False, f"{actor.name} has no Action Surge uses remaining.")
+        actor.action_economy.action_available = True
+        return ActionResult(
+            True,
+            f"{actor.name} uses Action Surge. action_available=True.",
+        )
+
+
+@dataclass
+class ChannelDivinityPreserveLifeAction(CombatAction):
+    """Use Life Domain Channel Divinity to heal a wounded ally."""
+
+    target_id: int | None = None
+    range: int = 6
+
+    def is_valid(self, combat_state: CombatState) -> bool:
+        actor = _get_character(combat_state, self.actor_id)
+        if actor is None or not actor.can_take_turn:
+            return False
+        if not actor.action_economy.action_available:
+            return False
+        if not can_use_feature_action(actor, "preserve_life", "action"):
+            return False
+        return self._resolve_target(combat_state, actor) is not None
+
+    def execute(self, combat_state: CombatState) -> ActionResult:
+        actor = _get_character(combat_state, self.actor_id)
+        if actor is None:
+            return ActionResult(False, f"Preserve Life failed: actor {self.actor_id} not found.")
+        target = self._resolve_target(combat_state, actor)
+        if target is None or not self.is_valid(combat_state):
+            return ActionResult(False, f"{actor.name} cannot use Preserve Life.")
+
+        actor.action_economy.spend_action()
+        spend_feature_resource(actor, "preserve_life")
+        healing_pool = max(1, int(getattr(actor, "level", 1))) * 5
+        half_hp_cap = max(1, target.max_hp // 2)
+        allowed_healing = max(0, half_hp_cap - target.hp)
+        healing = min(healing_pool, allowed_healing)
+        before_hp = target.hp
+        target.hp = min(target.max_hp, target.hp + healing)
+        if target.hp > 0:
+            target.stable = True
+        return ActionResult(
+            True,
+            (
+                f"{actor.name} uses Channel Divinity: Preserve Life on "
+                f"{target.name} and heals {target.hp - before_hp} HP. "
+                "Action spent: action_available=False."
+            ),
+        )
+
+    def _resolve_target(
+        self,
+        combat_state: CombatState,
+        actor: Character,
+    ) -> Character | None:
+        if self.target_id is not None:
+            target = _get_character(combat_state, self.target_id)
+            if target is not None and _can_preserve_life_target(
+                combat_state,
+                actor,
+                target,
+                self.range,
+            ):
+                return target
+            return None
+        candidates = [
+            target
+            for target in combat_state.characters
+            if _can_preserve_life_target(combat_state, actor, target, self.range)
+        ]
+        if not candidates:
+            return None
+        return min(candidates, key=lambda target: target.hp / max(1, target.max_hp))
 
 
 @dataclass
@@ -604,9 +912,24 @@ class UseObjectAction(CombatAction):
     """Spend an action to use a simple object if one is provided."""
 
     object_name: str = "object"
+    item: CombatItem | None = None
+    target_cell: Position | None = None
+    direction: AoEDirection | str | int | None = None
 
     def is_valid(self, combat_state: CombatState) -> bool:
-        return _can_spend_action(combat_state, self.actor_id, COMMON_ACTION_USE_OBJECT)
+        actor = _get_character(combat_state, self.actor_id)
+        if not _can_spend_action(combat_state, self.actor_id, COMMON_ACTION_USE_OBJECT):
+            return False
+        if actor is None:
+            return False
+        item = self._resolve_item(actor)
+        if item is None:
+            return True
+        if not item.implemented or item.action_cost != "action":
+            return False
+        if item.has_aoe:
+            return self._aoe_targeting_for_item(combat_state, actor, item) is not None
+        return True
 
     def execute(self, combat_state: CombatState) -> ActionResult:
         actor = _get_character(combat_state, self.actor_id)
@@ -616,6 +939,15 @@ class UseObjectAction(CombatAction):
             return ActionResult(False, f"{actor.name} cannot Use an Object.")
         actor.action_economy.spend_action()
         actor.action_economy.spend_free_object_interaction()
+        item = self._resolve_item(actor)
+        if item is not None and item.has_aoe:
+            targeting = self._aoe_targeting_for_item(combat_state, actor, item)
+            if targeting is None:
+                return ActionResult(False, f"{actor.name} cannot place {item.name}.")
+            result = _execute_area_item_effect(combat_state, actor, item, targeting)
+            if item.consumed_on_use:
+                _consume_item(actor, item)
+            return result
         return ActionResult(
             True,
             (
@@ -623,6 +955,43 @@ class UseObjectAction(CombatAction):
                 "Action spent: action_available=False."
             ),
         )
+
+    def _resolve_item(self, actor: Character) -> CombatItem | None:
+        return resolve_item(actor, self.item or self.object_name)
+
+    def _aoe_targeting_for_item(
+        self,
+        combat_state: CombatState,
+        actor: Character,
+        item: CombatItem,
+    ) -> AoETargeting | None:
+        shape = supported_item_aoe_shape(item)
+        if shape is None:
+            return None
+        if shape is AoEShape.RADIUS:
+            if self.target_cell is None:
+                return None
+            if not _can_place_target_cell_aoe(combat_state, actor, self.target_cell, item.range):
+                return None
+            targeting = AoETargeting(
+                shape=shape,
+                origin=actor.position,
+                size=item.area_size,
+                target_cell=self.target_cell,
+            )
+        else:
+            direction = coerce_aoe_direction(self.direction)
+            if direction is None:
+                return None
+            targeting = AoETargeting(
+                shape=shape,
+                origin=actor.position,
+                size=item.area_size,
+                direction=direction,
+            )
+        if not _aoe_has_affected_creature(combat_state, targeting):
+            return None
+        return targeting
 
 
 @dataclass
@@ -875,13 +1244,333 @@ def _can_target_spell(
     target: Character,
     spell: SpellAbility,
 ) -> bool:
-    if target is actor or target.team == actor.team or target.hp <= 0:
+    single_target_valid = can_target_spell_with_rules(
+        actor,
+        target,
+        spell,
+        distance=_distance(actor.position, target.position, combat_state),
+        has_line_of_sight=_has_line_of_sight(
+            combat_state,
+            actor.position,
+            target.position,
+        ),
+        has_full_cover=(
+            _cover_between(combat_state, actor.position, target.position)
+            is CoverType.FULL_COVER
+        ),
+    )
+    if not single_target_valid:
         return False
+    if spell_has_aoe(spell):
+        return _can_area_spell_target(combat_state, actor, target, spell)
+    return True
+
+
+def _can_spend_spell_action(actor: Character, spell: SpellAbility) -> bool:
+    if spell.action_cost == "reaction":
+        return actor.action_economy.reaction_available
+    if spell.action_cost == "bonus_action":
+        return actor.action_economy.bonus_action_available
+    return actor.action_economy.action_available
+
+
+def _spend_spell_action(actor: Character, spell: SpellAbility) -> None:
+    if spell.action_cost == "reaction":
+        actor.action_economy.spend_reaction()
+    elif spell.action_cost == "bonus_action":
+        actor.action_economy.spend_bonus_action()
+    else:
+        actor.action_economy.spend_action()
+
+
+def _spell_action_spent_text(spell: SpellAbility) -> str:
+    if spell.action_cost == "reaction":
+        return "Reaction spent: reaction_available=False."
+    if spell.action_cost == "bonus_action":
+        return "Bonus action spent: bonus_action_available=False."
+    return "Action spent: action_available=False."
+
+
+def _target_saves_against_spell(
+    actor: Character,
+    target: Character,
+    spell: SpellAbility,
+    combat_state: CombatState | None = None,
+    source_position: Position | None = None,
+) -> bool:
+    if spell.save_ability is None:
+        return False
+    save_roll = random.randint(1, 20) + ability_modifier(target.stats, spell.save_ability)
+    if combat_state is not None and spell.save_ability.casefold() == "dex":
+        cover_origin = source_position or actor.position
+        save_roll = apply_cover_to_dex_save(
+            save_roll,
+            _cover_between(combat_state, cover_origin, target.position),
+        )
+    save_dc = spell.save_dc or getattr(actor, "spell_save_dc", 10)
+    return save_roll >= save_dc
+
+
+def _execute_area_damage_spell(
+    combat_state: CombatState,
+    actor: Character,
+    spell: SpellAbility,
+    casting_level: int,
+    targeting: AoETargeting,
+) -> ActionResult:
+    base_damage = _roll_spell_effect(
+        spell.damage or 0,
+        spell.upcast_damage_per_level,
+        spell.spell_level,
+        casting_level,
+    )
+    affected_targets = _area_targets(combat_state, targeting)
+    log_affected_targets(spell.name, targeting, affected_targets)
+    summaries: list[str] = []
+    total_damage = 0
+
+    for affected in affected_targets:
+        if _is_sculpted_ally(actor, affected, spell):
+            summaries.append(f"{affected.name} protected by Sculpt Spells")
+            continue
+
+        raw_damage = base_damage
+        saved = _target_saves_against_spell(
+            actor,
+            affected,
+            spell,
+            combat_state,
+            source_position=targeting.source_position,
+        )
+        if saved:
+            raw_damage = raw_damage // 2 if spell.save_half_damage else 0
+        raw_damage = on_damage_roll(
+            actor,
+            raw_damage,
+            target=affected,
+            spell=spell,
+            combat_state=combat_state,
+        )
+        damage = apply_damage_modifiers(affected, raw_damage, spell.damage_type)
+        _apply_damage_to_character(affected, damage)
+        total_damage += damage
+        save_text = " after save" if saved else ""
+        summaries.append(f"{affected.name}: {damage} damage{save_text}")
+
+    spend_spell_resources(actor, spell, casting_level)
+    begin_spell_concentration(actor, spell)
+    spent_text = _spell_action_spent_text(spell)
+    return ActionResult(
+        True,
+        (
+            f"{actor.name} casts {spell.name} at level {casting_level}; "
+            f"{'; '.join(summaries)}. Total damage: {total_damage}. "
+            f"{spent_text}"
+        ),
+    )
+
+
+def _execute_area_item_effect(
+    combat_state: CombatState,
+    actor: Character,
+    item: CombatItem,
+    targeting: AoETargeting,
+) -> ActionResult:
+    affected_targets = _area_targets(combat_state, targeting)
+    log_affected_targets(item.name, targeting, affected_targets)
+    summaries: list[str] = []
+    total_damage = 0
+
+    for affected in affected_targets:
+        raw_damage = _roll_damage(_item_damage(item))
+        saved = _target_saves_against_item(
+            actor,
+            affected,
+            item,
+            combat_state,
+            source_position=targeting.source_position,
+        )
+        if saved:
+            raw_damage = raw_damage // 2 if item.save_half_damage else 0
+        damage = apply_damage_modifiers(affected, raw_damage, _item_damage_type(item))
+        _apply_damage_to_character(affected, damage)
+        total_damage += damage
+        save_text = " after save" if saved else ""
+        summaries.append(f"{affected.name}: {damage} damage{save_text}")
+
+    return ActionResult(
+        True,
+        (
+            f"{actor.name} uses {item.name}; {'; '.join(summaries)}. "
+            f"Total damage: {total_damage}. Action spent: action_available=False."
+        ),
+    )
+
+
+def _item_damage_type(item: CombatItem) -> object:
+    if item.effect is not None and item.effect.damage_type is not None:
+        return item.effect.damage_type
+    return item.damage_type
+
+
+def _item_damage(item: CombatItem) -> int | str:
+    if item.effect is not None and item.effect.damage is not None:
+        return item.effect.damage
+    return item.damage or 0
+
+
+def _apply_temporary_ac_spell(actor: Character, spell: SpellAbility) -> None:
+    previous_bonus = int(getattr(actor, "_temporary_spell_ac_bonus", 0))
+    if previous_bonus > 0:
+        actor.ac = max(0, actor.ac - previous_bonus)
+    actor.ac += spell.ac_bonus
+    actor._temporary_spell_ac_bonus = spell.ac_bonus
+    actor._temporary_spell_ac_source = spell.name
+    actor.conditions = [
+        condition for condition in actor.conditions if condition.name != spell.name
+    ]
+    actor.conditions.append(
+        Condition(
+            name=spell.name,
+            duration_rounds=1,
+            description=f"+{spell.ac_bonus} AC until the start of the next turn.",
+        )
+    )
+
+
+def _apply_damage_to_character(target: Character, damage: int) -> None:
+    normalized_damage = max(0, int(damage))
+    target.hp = max(0, target.hp - normalized_damage)
+    if normalized_damage > 0:
+        handle_concentration_damage(target, normalized_damage)
+    if target.hp > 0 and normalized_damage > 0:
+        target.stable = False
+
+
+def _target_saves_against_item(
+    actor: Character,
+    target: Character,
+    item: CombatItem,
+    combat_state: CombatState,
+    source_position: Position,
+) -> bool:
+    if item.save_ability is None:
+        return False
+    save_roll = random.randint(1, 20) + ability_modifier(target.stats, item.save_ability)
+    if item.save_ability.casefold() == "dex":
+        save_roll = apply_cover_to_dex_save(
+            save_roll,
+            _cover_between(combat_state, source_position, target.position),
+        )
+    save_dc = 10 + ability_modifier(actor.stats, "dex")
+    return save_roll >= save_dc
+
+
+def _consume_item(actor: Character, item: CombatItem) -> None:
+    items = getattr(actor, "items", None)
+    if not isinstance(items, list):
+        return
+    for index, candidate in enumerate(items):
+        if candidate is item or getattr(candidate, "name", None) == item.name:
+            del items[index]
+            return
+
+
+def _can_area_spell_target(
+    combat_state: CombatState,
+    actor: Character,
+    target: Character,
+    spell: SpellAbility,
+) -> bool:
+    targeting = _spell_targeting_from_creature(actor, target, spell)
+    return targeting is not None and _aoe_has_affected_creature(combat_state, targeting)
+
+
+def _spell_targeting_from_creature(
+    actor: Character,
+    target: Character,
+    spell: SpellAbility,
+) -> AoETargeting | None:
+    shape = spell_aoe_shape(spell)
+    if shape is None:
+        return None
+    if shape is AoEShape.RADIUS:
+        return AoETargeting(
+            shape=shape,
+            origin=actor.position,
+            size=spell.area_size,
+            target_cell=target.position,
+        )
+    return AoETargeting(
+        shape=shape,
+        origin=actor.position,
+        size=spell.area_size,
+        direction=direction_from_positions(actor.position, target.position),
+    )
+
+
+def _area_targets(
+    combat_state: CombatState,
+    targeting: AoETargeting,
+) -> list[Character]:
+    positions = positions_for_aoe(targeting)
+    if combat_state.grid_map is not None:
+        positions = {
+            position
+            for position in positions
+            if combat_state.grid_map.in_bounds(position)
+        }
+    return affected_creatures(combat_state.characters, positions)
+
+
+def _aoe_has_affected_creature(
+    combat_state: CombatState,
+    targeting: AoETargeting,
+) -> bool:
+    return bool(_area_targets(combat_state, targeting))
+
+
+def _can_place_target_cell_aoe(
+    combat_state: CombatState,
+    actor: Character,
+    target_cell: Position,
+    range_limit: int,
+) -> bool:
+    if _distance(actor.position, target_cell, combat_state) > range_limit:
+        return False
+    if not _has_line_of_sight(combat_state, actor.position, target_cell):
+        return False
+    return _cover_between(combat_state, actor.position, target_cell) is not CoverType.FULL_COVER
+
+
+def _has_sculpt_spells(actor: Character, spell: SpellAbility) -> bool:
     return (
-        _distance(actor.position, target.position, combat_state) <= spell.range
+        (spell.school or "").casefold() == "evocation"
+        and spell_has_aoe(spell)
+        and character_has_class_feature(actor, "Sculpt Spells")
+    )
+
+
+def _is_sculpted_ally(
+    actor: Character,
+    target: Character,
+    spell: SpellAbility,
+) -> bool:
+    return target.team == actor.team and _has_sculpt_spells(actor, spell)
+
+
+def _can_preserve_life_target(
+    combat_state: CombatState,
+    actor: Character,
+    target: Character,
+    range_limit: int,
+) -> bool:
+    return (
+        target.team == actor.team
+        and target.is_alive
+        and target.hp < max(1, target.max_hp // 2)
+        and _distance(actor.position, target.position, combat_state) <= range_limit
         and _has_line_of_sight(combat_state, actor.position, target.position)
-        and _cover_between(combat_state, actor.position, target.position)
-        is not CoverType.FULL_COVER
     )
 
 
@@ -1008,23 +1697,73 @@ def _discover_hidden_targets(
     return discovered
 
 
+def _weapon_attack_modifier(actor: Character, weapon: WeaponAttack) -> int:
+    return weapon.attack_modifier(actor) + archery_attack_bonus(actor, weapon)
+
+
+def _roll_weapon_damage(
+    actor: Character,
+    weapon: WeaponAttack,
+    *,
+    critical: bool = False,
+) -> int:
+    dice_multiplier = 2 if critical else 1
+    damage = _roll_damage_dice(
+        weapon.damage,
+        dice_multiplier=dice_multiplier,
+        reroll_low=should_use_great_weapon_fighting(actor, weapon),
+    )
+    return max(0, damage + weapon.damage_modifier(actor))
+
+
 def _roll_damage(damage: int | str) -> int:
+    return _roll_damage_dice(damage)
+
+
+def _roll_spell_effect(
+    base_effect: int | str,
+    upcast_effect_per_level: int | str | None,
+    spell_level: int,
+    cast_level: int,
+) -> int:
+    total = _roll_damage(base_effect)
+    extra_levels = max(0, int(cast_level) - max(1, int(spell_level)))
+    if upcast_effect_per_level is not None:
+        for _ in range(extra_levels):
+            total += _roll_damage(upcast_effect_per_level)
+    return max(0, total)
+
+
+def _roll_damage_dice(
+    damage: int | str,
+    *,
+    dice_multiplier: int = 1,
+    reroll_low: bool = False,
+) -> int:
     if isinstance(damage, int):
-        return max(0, damage)
+        return max(0, damage * max(1, dice_multiplier))
 
     damage_text = damage.strip().lower()
     if damage_text.isdigit():
-        return int(damage_text)
+        return int(damage_text) * max(1, dice_multiplier)
 
     match = re.fullmatch(r"(\d*)d(\d+)([+-]\d+)?", damage_text)
     if match is None:
         raise ValueError(f"Unsupported damage value: {damage}")
 
-    dice_count = int(match.group(1) or 1)
+    dice_count = int(match.group(1) or 1) * max(1, dice_multiplier)
     die_size = int(match.group(2))
     modifier = int(match.group(3) or 0)
-    total = sum(random.randint(1, die_size) for _ in range(dice_count)) + modifier
+    total = sum(_roll_damage_die(die_size, reroll_low=reroll_low) for _ in range(dice_count))
+    total += modifier
     return max(0, total)
+
+
+def _roll_damage_die(die_size: int, *, reroll_low: bool = False) -> int:
+    roll = random.randint(1, die_size)
+    if reroll_low and roll <= 2:
+        return random.randint(1, die_size)
+    return roll
 
 
 def _attack_roll(

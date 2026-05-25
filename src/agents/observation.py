@@ -23,23 +23,44 @@ from combat.class_features import (
     implemented_class_features,
     implemented_feature_active_actions,
 )
+from combat.damage import (
+    DAMAGE_TYPES,
+    character_immunities,
+    character_resistances,
+    character_vulnerabilities,
+    coerce_damage_type,
+)
 from combat.cover import CoverType
 from combat.models import Character, CombatState, Position, Team
+from combat.spellcasting import (
+    available_castable_spells,
+    can_target_spell as can_target_spell_with_rules,
+    spell_system_available,
+)
 from combat.terrain import TerrainType
 
 
 MAX_NEARBY_CHARACTERS = 4
 BASE_CHARACTER_FEATURE_SIZE = 20
+DAMAGE_TYPE_FEATURE_SIZE = len(DAMAGE_TYPES)
+ACTOR_DAMAGE_ACTION_FEATURE_SIZE = DAMAGE_TYPE_FEATURE_SIZE
+OTHER_DAMAGE_PROFILE_FEATURE_SIZE = DAMAGE_TYPE_FEATURE_SIZE * 3
 ACTOR_CLASS_FEATURE_SIZE = 6
 ACTOR_MAP_FEATURE_SIZE = 10
 OTHER_MAP_FEATURE_SIZE = 2
 ACTOR_FEATURE_SIZE = (
     BASE_CHARACTER_FEATURE_SIZE
     + 18
+    + ACTOR_DAMAGE_ACTION_FEATURE_SIZE
     + ACTOR_MAP_FEATURE_SIZE
     + ACTOR_CLASS_FEATURE_SIZE
 )
-OTHER_CHARACTER_FEATURE_SIZE = BASE_CHARACTER_FEATURE_SIZE + 9 + OTHER_MAP_FEATURE_SIZE
+OTHER_CHARACTER_FEATURE_SIZE = (
+    BASE_CHARACTER_FEATURE_SIZE
+    + 9
+    + OTHER_DAMAGE_PROFILE_FEATURE_SIZE
+    + OTHER_MAP_FEATURE_SIZE
+)
 CHARACTER_FEATURE_SIZE = OTHER_CHARACTER_FEATURE_SIZE
 OBSERVATION_SIZE = (
     ACTOR_FEATURE_SIZE
@@ -106,6 +127,7 @@ def _encode_actor(
         float(_can_help(state, actor_id, actor)),
         float(_can_grapple(state, actor_id, actor)),
         float(_can_shove(state, actor_id, actor)),
+        *_encode_available_damage_types(actor),
         *_encode_actor_map_features(actor, state),
         *_encode_actor_class_features(actor),
     ]
@@ -162,6 +184,7 @@ def _encode_other_character(
         float(_can_help_against_target(state, actor, character)),
         float(_can_grapple_target(state, actor, character)),
         float(_can_shove_target(state, actor, character)),
+        *_encode_damage_profile(character),
         _cover_value(_cover_between(state, actor.position, character.position)),
         float(_has_line_of_sight(state, actor.position, character.position)),
     ]
@@ -264,8 +287,48 @@ def _has_ranged_attack(character: Character) -> bool:
     )
 
 
+def _encode_available_damage_types(character: Character) -> list[float]:
+    damage_types = {
+        damage_type
+        for weapon in character.available_weapons
+        for damage_type in (coerce_damage_type(weapon.damage_type),)
+        if damage_type is not None
+    }
+    for spell in available_castable_spells(character):
+        if spell.damage is None:
+            continue
+        damage_type = coerce_damage_type(spell.damage_type)
+        if damage_type is not None:
+            damage_types.add(damage_type)
+    for item in getattr(character, "items", ()) or ():
+        damage_type = coerce_damage_type(getattr(item, "damage_type", None))
+        if damage_type is not None:
+            damage_types.add(damage_type)
+    return _damage_type_flags(damage_types)
+
+
+def _encode_damage_profile(character: Character) -> list[float]:
+    return [
+        *_damage_type_flags(character_resistances(character)),
+        *_damage_type_flags(character_immunities(character)),
+        *_damage_type_flags(character_vulnerabilities(character)),
+    ]
+
+
+def _damage_type_flags(damage_types: set[object]) -> list[float]:
+    normalized = {
+        damage_type
+        for value in damage_types
+        for damage_type in (coerce_damage_type(value),)
+        if damage_type is not None
+    }
+    return [float(damage_type in normalized) for damage_type in DAMAGE_TYPES]
+
+
 def _has_spells(character: Character) -> bool:
-    return any(isinstance(ability, SpellAbility) for ability in character.abilities)
+    return bool(character.cantrips or character.prepared_spells) or any(
+        isinstance(ability, SpellAbility) for ability in character.abilities
+    )
 
 
 def _has_implemented_feature(character: Character, feature_name: str) -> bool:
@@ -291,7 +354,7 @@ def _can_cast_spell(state: CombatState, actor: Character) -> bool:
         return False
     return any(
         _spell_has_valid_target_or_no_target(state, actor, spell)
-        for spell in _available_spells(actor)
+        for spell in _available_spells(actor, "action")
     )
 
 
@@ -455,12 +518,14 @@ def _is_in_melee_reach(
     return _distance(actor.position, target.position, state) <= 1
 
 
-def _available_spells(actor: Character) -> list[SpellAbility]:
-    return [
-        ability
-        for ability in actor.available_abilities
-        if isinstance(ability, SpellAbility) and _has_spell_slot(actor, ability)
-    ]
+def _available_spells(
+    actor: Character,
+    action_cost: str | None = None,
+) -> list[SpellAbility]:
+    spells = available_castable_spells(actor)
+    if action_cost is None:
+        return spells
+    return [spell for spell in spells if spell.action_cost == action_cost]
 
 
 def _spell_has_valid_target_or_no_target(
@@ -468,7 +533,7 @@ def _spell_has_valid_target_or_no_target(
     actor: Character,
     spell: SpellAbility,
 ) -> bool:
-    if spell.damage is None:
+    if spell.damage is None and spell.healing is None:
         return True
     return any(_can_target_spell(state, actor, target, spell) for target in state.characters)
 
@@ -479,40 +544,23 @@ def _can_target_spell(
     target: Character,
     spell: SpellAbility,
 ) -> bool:
-    return (
-        target is not actor
-        and target.team != actor.team
-        and target.is_alive
-        and _distance(actor.position, target.position, state) <= spell.range
-        and _has_line_of_sight(state, actor.position, target.position)
-        and _cover_between(state, actor.position, target.position) is not CoverType.FULL_COVER
+    return can_target_spell_with_rules(
+        actor,
+        target,
+        spell,
+        distance=_distance(actor.position, target.position, state),
+        has_line_of_sight=_has_line_of_sight(state, actor.position, target.position),
+        has_full_cover=_cover_between(state, actor.position, target.position)
+        is CoverType.FULL_COVER,
     )
 
 
 def _spell_system_available(actor: Character) -> bool:
-    return any(
-        hasattr(actor, attribute_name)
-        for attribute_name in (
-            "spell_slots",
-            "spell_slots_remaining",
-            "spellcasting",
-        )
-    )
+    return spell_system_available(actor)
 
 
 def _has_spell_slot(actor: Character, spell: SpellAbility) -> bool:
-    if not _spell_system_available(actor):
-        return False
-    if spell.spell_level <= 0:
-        return True
-
-    for attribute_name in ("spell_slots_remaining", "spell_slots"):
-        slots = getattr(actor, attribute_name, None)
-        if isinstance(slots, dict):
-            return int(slots.get(spell.spell_level, 0)) > 0
-        if isinstance(slots, int):
-            return slots > 0
-    return True
+    return spell in _available_spells(actor)
 
 
 def _has_line_of_sight(

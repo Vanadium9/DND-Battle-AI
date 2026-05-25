@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from rules.spellcasting_progression import FULL_CASTER, FULL_CASTER_SPELL_SLOTS
+
 if TYPE_CHECKING:
     from combat.class_features import ClassFeature, Resource
     from combat.models import Character
@@ -26,14 +28,6 @@ PROFICIENCY_BONUS_BY_LEVEL: dict[int, int] = {
     3: 2,
     4: 2,
     5: 3,
-}
-
-FULL_CASTER_SPELL_SLOTS: dict[int, dict[int, int]] = {
-    1: {1: 2},
-    2: {1: 3},
-    3: {1: 4, 2: 2},
-    4: {1: 4, 2: 3},
-    5: {1: 4, 2: 3, 3: 2},
 }
 
 BASE_COMMON_ACTIONS: tuple[str, ...] = (
@@ -122,11 +116,14 @@ def sync_character_progression(character: "Character") -> "Character":
             getattr(character, "resources", {}),
         )
 
+    from combat.class_features import apply_defense_fighting_style
+
+    apply_defense_fighting_style(character)
+
     if is_spellcaster(character):
-        spell_slots = spell_slots_for_level(character.level)
-        character.spellcasting = True
-        character.spell_slots = dict(spell_slots)
-        character.spell_slots_remaining = dict(spell_slots)
+        from combat.spellcasting import configure_spellcasting
+
+        configure_spellcasting(character)
 
     return character
 
@@ -188,9 +185,9 @@ def is_spellcaster(character: "Character") -> bool:
 def spell_slots_for_level(level: int) -> dict[int, int]:
     """Return simplified full-caster spell slots for levels 1-5."""
 
-    from rules.classes import spell_slots_for_class_level
+    from rules.spellcasting_progression import get_spell_slots_for_progression
 
-    return spell_slots_for_class_level("Wizard", _clamp_level(level))
+    return get_spell_slots_for_progression(FULL_CASTER, _clamp_level(level))
 
 
 def _normalized_class_name(class_name: str | None) -> str | None:

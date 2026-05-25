@@ -119,7 +119,8 @@ def test_action_masks_reflect_valid_actions_and_resources() -> None:
     assert masks["action_category"][ActionCategory.MOVEMENT]
     assert masks["main_action_type"][MainActionType.ATTACK]
     assert masks["action_category"][ActionCategory.END_TURN]
-    assert not masks["action_category"][ActionCategory.BONUS_ACTION]
+    assert masks["action_category"][ActionCategory.BONUS_ACTION]
+    assert masks["action_category"][ActionCategory.CLASS_FEATURE]
     assert not masks["action_category"][ActionCategory.REACTION]
     assert masks["target_index"][1]
 

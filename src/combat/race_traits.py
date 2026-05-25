@@ -6,6 +6,11 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from combat.action_economy import reset_turn_resources
+from combat.damage import (
+    apply_damage_modifiers,
+    has_damage_resistance as character_has_damage_resistance,
+    normalize_damage_type_set,
+)
 from rules.races import RaceDefinition, get_race_definition
 
 if TYPE_CHECKING:
@@ -65,6 +70,9 @@ def apply_race_traits(
     character.size = character.race_traits.size
     _apply_ability_score_bonuses(character, character.race_traits.ability_score_bonuses)
     character.speed = override_speed if override_speed is not None else character.race_traits.speed
+    character.resistances.update(
+        normalize_damage_type_set(character.race_traits.damage_resistances)
+    )
     _apply_weapon_proficiencies(character)
     reset_turn_resources(character)
     return character
@@ -82,16 +90,7 @@ def weapon_is_racially_proficient(character: "Character", weapon_name: str) -> b
 
 
 def has_damage_resistance(character: "Character", damage_type: str | None) -> bool:
-    if not damage_type:
-        return False
-    traits = getattr(character, "race_traits", None)
-    if traits is None:
-        return False
-    damage_key = _normalization_key(damage_type)
-    return any(
-        _normalization_key(resistance) == damage_key
-        for resistance in traits.damage_resistances
-    )
+    return character_has_damage_resistance(character, damage_type)
 
 
 def apply_damage_resistance(
@@ -101,10 +100,7 @@ def apply_damage_resistance(
 ) -> int:
     """Reduce damage when a race grants resistance to its damage type."""
 
-    normalized_damage = max(0, int(damage))
-    if has_damage_resistance(character, damage_type):
-        return normalized_damage // 2
-    return normalized_damage
+    return apply_damage_modifiers(character, damage, damage_type)
 
 
 def use_halfling_lucky(character: "Character", roll: int, reroll: int) -> int:

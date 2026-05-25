@@ -45,7 +45,10 @@ def make_enemy() -> Character:
 def test_fighter_level_one_gets_only_level_one_features() -> None:
     fighter = build_character(name="Fighter", class_name="Fighter", level=1)
 
-    assert {feature.name for feature in fighter.class_features} == {"Second Wind"}
+    assert {feature.name for feature in fighter.class_features} == {
+        "Fighting Style",
+        "Second Wind",
+    }
     assert all(feature.level <= 1 for feature in fighter.class_features)
     assert all(isinstance(feature, FeatureDefinition) for feature in fighter.class_features)
     assert all(isinstance(feature, ClassFeature) for feature in fighter.class_features)
@@ -60,8 +63,10 @@ def test_fighter_level_three_gets_subclass_features() -> None:
     )
 
     assert {feature.name for feature in fighter.class_features} == {
+        "Fighting Style",
         "Second Wind",
         "Action Surge",
+        "Martial Archetype: Champion",
         "Improved Critical",
     }
 
@@ -78,6 +83,7 @@ def test_wizard_level_five_gets_class_features_through_level_five() -> None:
     assert {
         "Spellcasting",
         "Arcane Recovery",
+        "Arcane Tradition: School of Evocation",
         "Evocation Savant",
         "Sculpt Spells",
         "2nd-level Spells",
@@ -151,8 +157,8 @@ def test_observation_encodes_implemented_class_feature_signals() -> None:
         ACTOR_FEATURE_SIZE - ACTOR_CLASS_FEATURE_SIZE : ACTOR_FEATURE_SIZE
     ]
 
-    assert feature_block[0] == 4
-    assert feature_block[1] == 4
+    assert feature_block[0] == 6
+    assert feature_block[1] == 6
     assert feature_block[2] == 1
     assert feature_block[3] == 1
 
@@ -164,4 +170,4 @@ def test_class_definitions_are_data_driven_progression_tables() -> None:
     assert fighter_definition.hit_die == 10
     assert fighter_definition.subclass_level == 3
     assert 1 in fighter_definition.level_features
-    assert build_class_features("Fighter", 1, "Champion")[0].name == "Second Wind"
+    assert build_class_features("Fighter", 1, "Champion")[0].name == "Fighting Style"

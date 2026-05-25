@@ -30,6 +30,7 @@ class RewardConfig:
     useless_hide_penalty: float = 0.03
     untriggered_ready_penalty: float = 0.02
     no_effect_action_penalty: float = 0.03
+    friendly_fire_penalty: float = 0.05
 
 
 @dataclass(frozen=True)
@@ -186,6 +187,7 @@ def calculate_combat_reward(
         "useless_hide": 0.0,
         "untriggered_ready": 0.0,
         "no_effect_action": 0.0,
+        "friendly_fire": 0.0,
     }
 
     if action is not None and action_success:
@@ -225,6 +227,14 @@ def opposing_team(team: Team) -> Team:
     return Team.ENEMIES if team is Team.PLAYERS else Team.PLAYERS
 
 
+def _team_damage_taken(
+    before: CombatRewardSnapshot,
+    after: CombatRewardSnapshot,
+    team: Team,
+) -> int:
+    return max(0, before.hp_by_team[team] - after.hp_by_team[team])
+
+
 def _common_action_rewards(
     before: CombatRewardSnapshot,
     after: CombatRewardSnapshot,
@@ -244,7 +254,13 @@ def _common_action_rewards(
         "useless_hide": 0.0,
         "untriggered_ready": 0.0,
         "no_effect_action": 0.0,
+        "friendly_fire": 0.0,
     }
+
+    if action_name in {"CastSpellAction", "UseObjectAction"}:
+        ally_damage = _team_damage_taken(before, after, actor_team)
+        if ally_damage > 0:
+            rewards["friendly_fire"] = -ally_damage * config.friendly_fire_penalty
 
     if action_name == "GrappleAction":
         if _successful_tactical_grapple(before, after, actor_team, action):

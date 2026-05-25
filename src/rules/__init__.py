@@ -34,14 +34,22 @@ from rules.classes import (
     get_class_definition,
     get_supported_class_definitions,
     get_supported_subclass_definitions,
+    spellcasting_ability_for_class,
+    spellcasting_type_for_class,
     spell_slots_for_class_level,
 )
+from rules.classes.cleric import CLERIC_DEFINITION
+from rules.classes.fighter import FIGHTER_DEFINITION, FIGHTING_STYLE_OPTIONS
+from rules.classes.wizard import WIZARD_DEFINITION
 from rules.subclasses import (
     SUBCLASS_DEFINITIONS,
     SubclassDefinition,
     get_subclass_definition,
     get_subclasses_for_class,
 )
+from rules.subclasses.champion import CHAMPION_DEFINITION
+from rules.subclasses.evocation import EVOCATION_DEFINITION
+from rules.subclasses.life_domain import LIFE_DOMAIN_DEFINITION
 from combat.class_features import FeatureDefinition
 from rules.feats import (
     ABILITY_SCORE_IMPROVEMENT_NAME,
@@ -65,6 +73,16 @@ from rules.races import (
     is_supported_race,
 )
 from rules.ruleset import Ruleset
+from rules.spellcasting_progression import (
+    FULL_CASTER,
+    FULL_CASTER_SPELL_SLOTS,
+    SPELLCASTING_TYPES,
+    class_uses_spellcasting_progression,
+    get_max_spell_level_for_progression,
+    get_spell_slots_for_progression,
+    get_spellcasting_ability_for_class,
+    get_spellcasting_type_for_class,
+)
 
 __all__ = [
     "DEFAULT_RULESET_CONFIG_PATH",
@@ -72,8 +90,15 @@ __all__ = [
     "ABILITY_SCORE_IMPROVEMENT_NAME",
     "COMBAT_HOOK_NAMES",
     "FEAT_DEFINITIONS",
+    "FIGHTER_DEFINITION",
+    "FIGHTING_STYLE_OPTIONS",
+    "FULL_CASTER",
+    "FULL_CASTER_SPELL_SLOTS",
     "GRAPPLER_NAME",
     "CLASS_DEFINITIONS",
+    "CHAMPION_DEFINITION",
+    "CLERIC_DEFINITION",
+    "EVOCATION_DEFINITION",
     "MAX_SUPPORTED_LEVEL",
     "MIN_SUPPORTED_LEVEL",
     "PROFICIENCY_BONUS_BY_LEVEL",
@@ -85,15 +110,19 @@ __all__ = [
     "FeatDefinition",
     "Ruleset",
     "RulesetRegistry",
+    "LIFE_DOMAIN_DEFINITION",
+    "SPELLCASTING_TYPES",
     "SUBCLASS_DEFINITIONS",
     "SubclassDefinition",
     "XP_THRESHOLDS",
+    "WIZARD_DEFINITION",
     "apply_level_up",
     "build_class_features",
     "build_class_features_from_definitions",
     "build_class_resources",
     "can_level_up",
     "class_uses_spellcasting",
+    "class_uses_spellcasting_progression",
     "create_default_registry",
     "get_active_ruleset",
     "get_class_definition",
@@ -101,8 +130,11 @@ __all__ = [
     "get_feat_prerequisite_failures",
     "get_level_for_xp",
     "get_proficiency_bonus",
+    "get_max_spell_level_for_progression",
     "get_race_definition",
     "get_registry",
+    "get_spell_slots_for_progression",
+    "get_spellcasting_ability_for_class",
     "get_subclass_definition",
     "get_subclasses_for_class",
     "get_supported_feat_definitions",
@@ -117,6 +149,9 @@ __all__ = [
     "load_ruleset_from_yaml",
     "normalize_ability_name",
     "spell_slots_for_level",
+    "spellcasting_ability_for_class",
+    "spellcasting_type_for_class",
+    "get_spellcasting_type_for_class",
     "spell_slots_for_class_level",
     "sync_character_progression",
     "validate_feat_prerequisites",

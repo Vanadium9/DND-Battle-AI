@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from combat.class_features import ClassFeature, FeatureDefinition
+from combat.class_features import FeatureDefinition
 
 
 @dataclass(frozen=True)
@@ -37,57 +37,20 @@ def _lookup_key(value: object) -> str:
     return "".join(character for character in str(value).casefold() if character.isalnum())
 
 
+from rules.subclasses.champion import CHAMPION_DEFINITION  # noqa: E402
+from rules.subclasses.life_domain import LIFE_DOMAIN_DEFINITION  # noqa: E402
+from rules.subclasses.evocation import EVOCATION_DEFINITION  # noqa: E402
+
+
 SUBCLASS_DEFINITIONS: dict[str, SubclassDefinition] = {
-    _subclass_key("Fighter", "Champion"): SubclassDefinition(
-        name="Champion",
-        parent_class="Fighter",
-        level_features={
-            3: (
-                ClassFeature(
-                    name="Improved Critical",
-                    level=3,
-                    passive_hooks=("on_attack_roll",),
-                    description="Champion feature saved for future attack logic.",
-                    implemented=False,
-                ),
-            ),
-        },
+    _subclass_key(CHAMPION_DEFINITION.parent_class, CHAMPION_DEFINITION.name): (
+        CHAMPION_DEFINITION
     ),
-    _subclass_key("Cleric", "Life Domain"): SubclassDefinition(
-        name="Life Domain",
-        parent_class="Cleric",
-        level_features={
-            1: (
-                ClassFeature(
-                    name="Disciple of Life",
-                    level=1,
-                    passive_hooks=("on_healing_roll",),
-                    description="Life Domain feature note.",
-                    implemented=False,
-                ),
-            ),
-        },
+    _subclass_key(LIFE_DOMAIN_DEFINITION.parent_class, LIFE_DOMAIN_DEFINITION.name): (
+        LIFE_DOMAIN_DEFINITION
     ),
-    _subclass_key("Wizard", "School of Evocation"): SubclassDefinition(
-        name="School of Evocation",
-        parent_class="Wizard",
-        level_features={
-            2: (
-                ClassFeature(
-                    name="Evocation Savant",
-                    level=2,
-                    description="School of Evocation feature note.",
-                    implemented=False,
-                ),
-                ClassFeature(
-                    name="Sculpt Spells",
-                    level=2,
-                    passive_hooks=("on_spell_area_targeting",),
-                    description="School of Evocation feature note.",
-                    implemented=False,
-                ),
-            ),
-        },
+    _subclass_key(EVOCATION_DEFINITION.parent_class, EVOCATION_DEFINITION.name): (
+        EVOCATION_DEFINITION
     ),
 }
 
@@ -114,4 +77,3 @@ def get_subclasses_for_class(parent_class: str | None) -> tuple[SubclassDefiniti
         for definition in SUBCLASS_DEFINITIONS.values()
         if _lookup_key(definition.parent_class) == parent_key
     )
-
