@@ -42,9 +42,11 @@ from combat.models import (
     WeaponAttack,
 )
 from combat.rewards import (
+    CombatReward,
     CombatRewardSnapshot,
     RewardConfig,
     calculate_combat_reward,
+    format_reward_breakdown,
     snapshot_combat_state,
 )
 from rules.xp import award_party_xp
@@ -152,7 +154,9 @@ class CombatEnvironment:
             self._award_xp_if_combat_complete()
             self.combat_state.reset_combat_resources()
         self._sync_turn_metadata()
-        return self._with_reward(result, reward_before, active_actor.team, action)
+        rewarded_result = self._with_reward(result, reward_before, active_actor.team, action)
+        self._record_reward_breakdown(rewarded_result)
+        return rewarded_result
 
     def get_observation(self, actor_id: int) -> dict[str, object]:
         actor = self.combat_state.character_at(actor_id)
@@ -451,7 +455,10 @@ class CombatEnvironment:
         actor_team: Team,
         action: CombatAction | None = None,
     ) -> ActionResult:
-        return self._record_result(self._with_reward(result, before, actor_team, action))
+        rewarded_result = self._with_reward(result, before, actor_team, action)
+        self._record_result(rewarded_result)
+        self._record_reward_breakdown(rewarded_result)
+        return rewarded_result
 
     def _with_reward(
         self,
@@ -473,6 +480,22 @@ class CombatEnvironment:
             success=result.success,
             description=result.description,
             reward=reward.total,
+            reward_breakdown=reward.breakdown,
+        )
+
+    def _record_reward_breakdown(self, result: ActionResult) -> None:
+        if not result.reward_breakdown:
+            return
+        self._record_result(
+            ActionResult(
+                True,
+                format_reward_breakdown(
+                    CombatReward(
+                        total=result.reward,
+                        breakdown=result.reward_breakdown,
+                    )
+                ),
+            )
         )
 
     @staticmethod

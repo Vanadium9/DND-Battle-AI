@@ -1653,3 +1653,278 @@ Action masks должны учитывать:
 - map width/height normalized
 
 Обнови input size PPO/GNN моделей и тесты.
+
+## 44. Запрос: Обнови reward function с учётом ограниченных ресурсов, карты и D&D-механик
+
+Файл:
+- src/combat/rewards.py
+
+Добавь:
+- небольшой штраф за трату spell slot
+- штраф выше для более высокого slot level
+- небольшой штраф за трату Action Surge
+- небольшой штраф за трату Second Wind, если лечение было неэффективным
+- штраф за overkill дорогим ресурсом
+- штраф за применение урона по immunity
+- штраф за применение resisted damage, если были доступные лучшие альтернативы
+- бонус за эффективное использование дорогого ресурса, если оно привело к убийству, спасению союзника или победе
+- бонус за использование cover, если оно помогло избежать урона
+- бонус за Dodge, если после этого атаки по персонажу промахнулись
+- бонус за Disengage, если персонаж избежал opportunity attack
+- штраф за движение в плохую позицию без тактической выгоды
+- штраф за friendly fire
+- штраф за трату предмета без эффекта
+
+Важно:
+- победа должна быть важнее экономии ресурсов
+- предотвращение смерти союзника должно быть важнее штрафа за ресурс
+- награды за ресурсы, cover и позиционирование не должны доминировать над основной целью боя
+
+Добавь reward breakdown в лог.
+Добавь тесты для основных reward components.
+
+## 45. Запрос: Добавь evaluation scenarios для уровней 1-5
+
+Файлы:
+- src/combat/evaluation_scenarios.py
+- scripts/evaluate_policy.py
+
+Сценарии:
+- Level 1 Fighter vs 1 Goblin
+- Level 1 Fighter + Cleric vs 2 Goblins
+- Level 3 Fighter Champion vs Orc
+- Level 3 Cleric Life + Fighter vs Orc + Goblin
+- Level 5 Wizard Evoker vs 3 Goblins
+- Level 5 Wizard Evoker vs FireElementalSimple
+- Level 5 Fighter + Cleric + Wizard vs mixed enemies
+- Level 5 ranged party on map with cover vs mixed enemies
+- Level 5 melee party on difficult terrain map vs archers
+
+evaluate_policy.py должен выводить:
+- win rate
+- average reward
+- average XP gained
+- average resource usage
+- spell slots used by level
+- class features usage
+- item usage
+- cover usage
+- average movement cost
+- deaths
+- action distribution
+- masked action statistics
+
+Добавь режим:
+- --by-level
+который прогоняет сценарии для каждого уровня 1-5.
+
+## 46. Запрос: Добавь curriculum learning в EncounterGenerator и PPO trainer
+
+Файлы:
+- src/combat/encounter_generator.py
+- src/training/ppo_trainer.py
+- configs/train_curriculum.yaml
+
+Уровни сложности:
+1. 1 Fighter level 1 vs 1 Goblin
+2. 1 Fighter level 1 vs 2 Goblins
+3. Fighter level 3 Champion vs Orc
+4. Fighter + Cleric vs Orc + Goblins
+5. Wizard scenarios
+6. mixed party vs mixed enemies
+7. enemies with resistances/immunities
+8. maps with obstacles and cover
+9. maps with difficult terrain and ranged enemies
+
+Trainer должен:
+- отслеживать win rate на текущем уровне
+- повышать difficulty при достижении threshold
+- сохранять current curriculum_level в checkpoint
+- логировать переходы между уровнями
+
+Добавь тесты:
+- curriculum level повышается при win rate threshold
+- curriculum state сохраняется в checkpoint
+
+## 47. Запрос: Переделай observation encoder на entity-based формат
+
+Файлы:
+- src/agents/observation.py
+- src/agents/entity_observation.py
+
+Вместо одного плоского вектора сделай:
+- actor_features
+- entities_features
+- map_features
+- global_features
+- entity_mask
+
+Для каждого entity:
+- hp ratio
+- ac
+- position
+- team relation
+- alive
+- distance_to_actor
+- prone
+- grappled
+- hidden
+- dodging
+- has_reaction
+- is_spellcaster
+- resistances/immunities/vulnerabilities
+- threat estimate
+- line_of_sight_from_actor
+- cover_from_actor
+
+Map features:
+- локальное окно вокруг актёра
+- terrain type
+- blocked cells
+- cover cells
+- movement cost map
+- visible cells, если реализовано
+
+Global features:
+- round number
+- initiative position
+- map size
+- current team
+- remaining allies
+- remaining enemies
+
+Сохрани совместимость:
+- старая MLP модель может использовать flattened version
+- новая GNN модель должна использовать entity-based version
+
+Добавь тесты:
+- entity mask корректен
+- map features имеют стабильный размер
+- flatten совместим со старой моделью
+
+## 48. Запрос: Добавь GNN encoder для состояния боя
+
+Файл:
+- src/agents/gnn_encoder.py
+
+Требования:
+- каждый персонаж/враг — node
+- node features берутся из entity-based observation
+- edge features:
+  - distance
+  - same_team
+  - enemy_relation
+  - can_attack
+  - can_help
+  - line_of_sight
+  - cover_between
+- реализуй простой message passing без внешних GNN-библиотек
+- поддержи padding и entity_mask
+
+Выход:
+- actor_embedding
+- pooled_allies_embedding
+- pooled_enemies_embedding
+- pooled_battle_embedding
+
+Не удаляй старый MLP encoder.
+
+Добавь тесты:
+- GNN работает при разном числе существ
+- masked entities не влияют на pooled embedding
+- выходные размерности стабильны
+
+## 49. Запрос: Создай новую модель GNNPPOActorCritic
+
+Файл:
+- src/agents/gnn_ppo_model.py
+
+Требования:
+- использовать GNNEncoder
+- policy heads:
+  - action_category_head
+  - main_action_type_head
+  - bonus_action_type_head
+  - reaction_type_head
+  - class_feature_head
+  - target_head
+  - move_head
+  - spell_head
+  - slot_level_head
+  - item_head
+  - option_head
+- value_head
+- поддержка action masking для всех heads
+- act(...)
+- evaluate_actions(...)
+
+Важно:
+- не удаляй MLP PPO модель
+- добавь model_type в конфиг:
+  - mlp
+  - gnn
+
+Добавь тесты:
+- модель возвращает легальное действие при masks
+- модель работает с variable entity count
+- модель работает с map features
+
+## 50. Запрос: Добавь centralized critic для multi-agent PPO
+
+Файлы:
+- src/agents/gnn_ppo_model.py
+- src/training/ppo_trainer.py
+
+Идея:
+- actor выбирает действие для конкретного существа
+- critic оценивает полное состояние боя
+
+Требования:
+- actor использует actor-centric observation
+- critic использует global/entity observation всего боя
+- value_head должен получать pooled_battle_embedding
+- PPO trainer должен сохранять:
+  - actor_observation
+  - critic_observation
+  - action
+  - log_prob
+  - value
+  - reward
+  - done
+  - masks
+
+Добавь флаг:
+- centralized_critic: true/false
+
+Добавь тесты:
+- trainer работает с centralized_critic=true
+- trainer работает с centralized_critic=false
+
+## 51. Запрос: Добавь поддержку разных политик для разных команд и ролей
+
+Файлы:
+- src/training/multi_agent.py
+- src/training/ppo_trainer.py
+
+Требования:
+- одна политика может управлять всеми существами
+- отдельная player_policy может управлять игроками
+- отдельная enemy_policy может управлять врагами
+- возможность rule_based_enemy_policy для baseline
+- возможность random_policy для baseline
+
+Добавь role embeddings:
+- MELEE_DAMAGE
+- RANGED_DAMAGE
+- TANK
+- SUPPORT
+- CASTER
+- BRUTE_ENEMY
+- SKIRMISHER_ENEMY
+
+Observation/model должны получать role_id.
+
+Добавь тесты:
+- player_policy управляет только игроками
+- enemy_policy управляет только врагами
+- одна общая policy может управлять всеми

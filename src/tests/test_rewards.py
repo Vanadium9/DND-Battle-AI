@@ -1,8 +1,14 @@
 from combat import (
+    ActionResult,
+    ActionSurgeAction,
     AttackAction,
+    CastSpellAction,
     Character,
+    CombatEnvironment,
     CombatRewardSnapshot,
+    CombatState,
     DashAction,
+    DamageType,
     DisengageAction,
     DodgeAction,
     GrappleAction,
@@ -10,12 +16,18 @@ from combat import (
     HelpAction,
     HideAction,
     ImprovisedAction,
+    MoveAction,
+    PotionOfHealing,
     Position,
     ReadyAction,
     RewardConfig,
+    Resource,
+    SecondWindAction,
     ShoveAction,
+    SpellAbility,
     Stats,
     Team,
+    TerrainType,
     UseObjectAction,
     WeaponAttack,
     calculate_combat_reward,
@@ -353,3 +365,258 @@ def test_reward_penalizes_common_actions_without_tactical_value(monkeypatch) -> 
         action_result=improvised_result,
     )
     assert improvised_reward.breakdown["no_effect_action"] < 0
+
+
+def test_spell_slot_penalty_scales_by_slot_level() -> None:
+    actor = make_character("Wizard", Position(0, 0), Team.PLAYERS)
+    target = make_character("Target", Position(1, 0), Team.ENEMIES)
+    actor.spell_slots_remaining = {1: 1, 3: 1}
+    actor.spell_slots = {1: 1, 3: 1}
+    spell = SpellAbility(
+        name="Magic Missile",
+        range=6,
+        spell_level=1,
+        damage=1,
+        damage_type=DamageType.FORCE,
+    )
+    state = make_state(actor, target)
+
+    before_level_1 = snapshot_combat_state(state)
+    actor.spell_slots_remaining[1] = 0
+    level_1_reward = calculate_combat_reward(
+        before_level_1,
+        snapshot_combat_state(state),
+        actor_team=Team.PLAYERS,
+        action=CastSpellAction(actor_id=0, target_id=1, spell=spell),
+        action_result=ActionResult(True, "Wizard casts Magic Missile at level 1."),
+    )
+
+    actor.spell_slots_remaining = {1: 1, 3: 1}
+    before_level_3 = snapshot_combat_state(state)
+    actor.spell_slots_remaining[3] = 0
+    level_3_reward = calculate_combat_reward(
+        before_level_3,
+        snapshot_combat_state(state),
+        actor_team=Team.PLAYERS,
+        action=CastSpellAction(actor_id=0, target_id=1, spell=spell, cast_level=3),
+        action_result=ActionResult(True, "Wizard casts Magic Missile at level 3."),
+    )
+
+    assert level_1_reward.breakdown["spell_slot_spent"] == -0.015
+    assert level_3_reward.breakdown["spell_slot_spent"] == -0.045
+    assert level_3_reward.breakdown["spell_slot_spent"] < level_1_reward.breakdown["spell_slot_spent"]
+
+
+def test_reward_penalizes_action_surge_and_ineffective_second_wind() -> None:
+    actor = make_character("Fighter", Position(0, 0), Team.PLAYERS, hp=19, max_hp=20)
+    actor.resources = {
+        "action_surge": Resource("action_surge", max_uses=1),
+        "second_wind": Resource("second_wind", max_uses=1),
+    }
+    enemy = make_character("Enemy", Position(1, 0), Team.ENEMIES)
+    state = make_state(actor, enemy)
+
+    before = snapshot_combat_state(state)
+    actor.resources["action_surge"].spend()
+    action_surge_reward = calculate_combat_reward(
+        before,
+        snapshot_combat_state(state),
+        actor_team=Team.PLAYERS,
+        action=ActionSurgeAction(actor_id=0),
+        action_result=ActionResult(True, "Fighter uses Action Surge."),
+    )
+
+    actor.resources["second_wind"].uses_remaining = 1
+    before = snapshot_combat_state(state)
+    actor.resources["second_wind"].spend()
+    actor.hp = 20
+    second_wind_reward = calculate_combat_reward(
+        before,
+        snapshot_combat_state(state),
+        actor_team=Team.PLAYERS,
+        action=SecondWindAction(actor_id=0),
+        action_result=ActionResult(True, "Fighter uses Second Wind and heals 1 HP."),
+    )
+
+    assert action_surge_reward.breakdown["action_surge_spent"] < 0
+    assert second_wind_reward.breakdown["ineffective_second_wind"] < 0
+
+
+def test_reward_penalizes_immunity_and_resisted_damage_with_better_alternative() -> None:
+    fire_weapon = WeaponAttack(
+        name="Fire Blade",
+        range=1,
+        damage=5,
+        damage_type=DamageType.FIRE,
+    )
+    force_weapon = WeaponAttack(
+        name="Force Blade",
+        range=1,
+        damage=5,
+        damage_type=DamageType.FORCE,
+    )
+    actor = make_character(
+        "Actor",
+        Position(0, 0),
+        Team.PLAYERS,
+        weapon=fire_weapon,
+    )
+    actor.weapons.append(force_weapon)
+    target = make_character("Target", Position(1, 0), Team.ENEMIES)
+    target.immunities = {DamageType.FIRE}
+    target.resistances = {DamageType.SLASHING}
+    state = make_state(actor, target)
+
+    before = snapshot_combat_state(state)
+    immunity_reward = calculate_combat_reward(
+        before,
+        snapshot_combat_state(state),
+        actor_team=Team.PLAYERS,
+        action=AttackAction(actor_id=0, target_id=1, weapon=fire_weapon),
+        action_result=ActionResult(True, "Actor attacks Target for 0 damage."),
+    )
+
+    slash_weapon = WeaponAttack(
+        name="Sword",
+        range=1,
+        damage=5,
+        damage_type=DamageType.SLASHING,
+    )
+    actor.weapons = [slash_weapon, force_weapon]
+    before = snapshot_combat_state(state)
+    target.hp -= 2
+    resisted_reward = calculate_combat_reward(
+        before,
+        snapshot_combat_state(state),
+        actor_team=Team.PLAYERS,
+        action=AttackAction(actor_id=0, target_id=1, weapon=slash_weapon),
+        action_result=ActionResult(True, "Actor attacks Target for 2 damage."),
+    )
+
+    assert immunity_reward.breakdown["immunity_damage"] < 0
+    assert resisted_reward.breakdown["resisted_damage"] < 0
+
+
+def test_reward_balances_effective_expensive_resource_and_overkill() -> None:
+    actor = make_character("Wizard", Position(0, 0), Team.PLAYERS)
+    target = make_character("Target", Position(1, 0), Team.ENEMIES, hp=1, max_hp=10)
+    actor.spell_slots_remaining = {3: 1}
+    actor.spell_slots = {3: 1}
+    spell = SpellAbility(
+        name="Fireball",
+        range=6,
+        spell_level=3,
+        damage="8d6",
+        damage_type=DamageType.FIRE,
+    )
+    state = make_state(actor, target)
+    before = snapshot_combat_state(state)
+    actor.spell_slots_remaining[3] = 0
+    target.hp = 0
+
+    reward = calculate_combat_reward(
+        before,
+        snapshot_combat_state(state),
+        actor_team=Team.PLAYERS,
+        action=CastSpellAction(actor_id=0, target_id=1, spell=spell),
+        action_result=ActionResult(True, "Wizard casts Fireball for 20 damage."),
+    )
+
+    assert reward.breakdown["effective_resource"] > 0
+    assert reward.breakdown["resource_overkill"] < 0
+    assert reward.breakdown["victory"] > abs(reward.breakdown["spell_slot_spent"])
+    assert reward.total > reward.breakdown["victory"]
+
+
+def test_reward_adds_cover_bonus_when_cover_prevents_damage() -> None:
+    target = make_character("Covered", Position(1, 0), Team.PLAYERS, ac=12)
+    attacker = make_character(
+        "Archer",
+        Position(0, 0),
+        Team.ENEMIES,
+        weapon=WeaponAttack(name="Bow", range=6, damage=3),
+    )
+    state = CombatState(
+        characters=[target, attacker],
+        grid_map=GridMap(
+            width=3,
+            height=3,
+            terrain_grid=[
+                [TerrainType.NORMAL, TerrainType.LOW_COVER, TerrainType.NORMAL],
+                [TerrainType.NORMAL, TerrainType.NORMAL, TerrainType.NORMAL],
+                [TerrainType.NORMAL, TerrainType.NORMAL, TerrainType.NORMAL],
+            ],
+        ),
+    )
+    before = snapshot_combat_state(state)
+
+    reward = calculate_combat_reward(
+        before,
+        snapshot_combat_state(state),
+        actor_team=Team.PLAYERS,
+        action=AttackAction(actor_id=1, target_id=0, weapon=attacker.weapons[0]),
+        action_result=ActionResult(True, "Archer attacks Covered: miss."),
+    )
+
+    assert reward.breakdown["cover_avoid_damage"] > 0
+
+
+def test_reward_penalizes_bad_position_movement_without_tactical_gain() -> None:
+    actor = make_character("Actor", Position(0, 0), Team.PLAYERS)
+    enemy = make_character("Enemy", Position(2, 0), Team.ENEMIES)
+    state = make_state(actor, enemy)
+    before = snapshot_combat_state(state)
+    actor.position = Position(1, 0)
+
+    reward = calculate_combat_reward(
+        before,
+        snapshot_combat_state(state),
+        actor_team=Team.PLAYERS,
+        action=MoveAction(actor_id=0, destination=Position(1, 0)),
+        action_result=ActionResult(True, "Actor moves into reach."),
+    )
+
+    assert reward.breakdown["bad_position"] < 0
+
+
+def test_reward_penalizes_wasted_consumable_item() -> None:
+    actor = make_character("Actor", Position(0, 0), Team.PLAYERS)
+    potion = PotionOfHealing(quantity=1)
+    actor.inventory = [potion]
+    enemy = make_character("Enemy", Position(1, 0), Team.ENEMIES)
+    state = make_state(actor, enemy)
+    before = snapshot_combat_state(state)
+    potion.quantity = 0
+
+    reward = calculate_combat_reward(
+        before,
+        snapshot_combat_state(state),
+        actor_team=Team.PLAYERS,
+        action=UseObjectAction(actor_id=0, item=potion, target_id=0),
+        action_result=ActionResult(True, "Actor uses Potion of Healing and heals 0 HP."),
+    )
+
+    assert reward.breakdown["wasted_item"] < 0
+    assert reward.breakdown["no_effect_action"] < 0
+
+
+def test_environment_logs_reward_breakdown(monkeypatch) -> None:
+    hero = make_character(
+        "Hero",
+        Position(0, 0),
+        Team.PLAYERS,
+        weapon=WeaponAttack(name="Sword", range=1, damage=4, attack_bonus=20),
+    )
+    enemy = make_character("Enemy", Position(1, 0), Team.ENEMIES)
+    environment = CombatEnvironment(
+        characters=[hero, enemy],
+        grid_map=GridMap(width=3, height=3),
+        use_initiative=False,
+        log_to_console=False,
+    )
+    monkeypatch.setattr("combat.common_actions.random.randint", lambda _low, _high: 10)
+
+    result = environment.step(AttackAction(actor_id=0, target_id=1, weapon=hero.weapons[0]))
+
+    assert result.reward_breakdown["damage_dealt"] > 0
+    assert any("Reward breakdown:" in entry for entry in environment.action_log)

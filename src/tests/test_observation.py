@@ -8,15 +8,25 @@ from agents import (
     BASE_CHARACTER_FEATURE_SIZE,
     CHARACTER_FEATURE_SIZE,
     GLOBAL_FEATURE_SIZE,
+    ENTITY_FEATURE_SIZE,
+    ENTITY_GLOBAL_FEATURE_SIZE,
+    GNN_NODE_FEATURE_SIZE,
+    LOCAL_MAP_CELL_COUNT,
+    MAP_CELL_FEATURE_SIZE,
     MAX_NEARBY_CHARACTERS,
+    MAX_ENTITY_COUNT,
     OBSERVATION_SIZE,
     OTHER_COMMON_ACTION_OFFSET,
     OTHER_CHARACTER_FEATURE_SIZE,
     OTHER_ENTITY_PROFILE_OFFSET,
     OTHER_MAP_FEATURE_OFFSET,
+    PPOActorCritic,
     encode_observation,
+    encode_entity_observation,
+    flatten_entity_observation,
 )
 from agents.entity_observation import (
+    COMBAT_ROLE_NAMES,
     FEAT_FLAG_NAMES,
     INVENTORY_ITEM_FLAG_NAMES,
     PREPARED_SPELL_FLAG_NAMES,
@@ -76,7 +86,8 @@ ACTOR_PROFICIENCY_NORMALIZED = ACTOR_REAL_GAME_OFFSET + 1
 ACTOR_CLASS_ID = ACTOR_REAL_GAME_OFFSET + 2
 ACTOR_SUBCLASS_ID = ACTOR_REAL_GAME_OFFSET + 3
 ACTOR_RACE_ID = ACTOR_REAL_GAME_OFFSET + 4
-ACTOR_FEAT_FLAGS = ACTOR_REAL_GAME_OFFSET + 5
+ACTOR_ROLE_ID = ACTOR_REAL_GAME_OFFSET + 5
+ACTOR_FEAT_FLAGS = ACTOR_REAL_GAME_OFFSET + 6
 ACTOR_ECONOMY_FLAGS = ACTOR_FEAT_FLAGS + len(FEAT_FLAG_NAMES)
 ACTOR_CLASS_RESOURCE_FLAGS = ACTOR_ECONOMY_FLAGS + 4
 ACTOR_SPELL_SLOT_FLAGS = ACTOR_CLASS_RESOURCE_FLAGS + 4
@@ -129,7 +140,7 @@ def other_block(observation: torch.Tensor, index: int) -> torch.Tensor:
 
 def test_encode_observation_returns_fixed_tensor_for_actor() -> None:
     actor = FighterArcher(Position(0, 0))
-    ally = FighterChampionGreatsword(Position(0, 2))
+    ally = WizardEvoker(Position(0, 2))
     goblin = Goblin(Position(1, 0))
     orc = Orc(Position(5, 5))
     state = CombatState(
@@ -195,6 +206,7 @@ def test_encode_observation_returns_fixed_tensor_for_actor() -> None:
     assert actor_features[ACTOR_CLASS_ID] == 1
     assert actor_features[ACTOR_SUBCLASS_ID] == 1
     assert actor_features[ACTOR_RACE_ID] == 0
+    assert actor_features[ACTOR_ROLE_ID] == COMBAT_ROLE_NAMES.index("RANGED_DAMAGE") + 1
     assert torch.count_nonzero(
         actor_features[ACTOR_FEAT_FLAGS : ACTOR_FEAT_FLAGS + len(FEAT_FLAG_NAMES)]
     ) == 0
@@ -284,6 +296,7 @@ def test_encode_observation_real_game_actor_and_global_features() -> None:
 
     assert actor_features[ACTOR_CLASS_ID] == 3
     assert actor_features[ACTOR_SUBCLASS_ID] == 3
+    assert actor_features[ACTOR_ROLE_ID] == COMBAT_ROLE_NAMES.index("CASTER") + 1
     assert actor_features[ACTOR_CLASS_RESOURCE_FLAGS + 3] == 1
     assert actor_features[ACTOR_SPELL_SLOT_FLAGS : ACTOR_SPELL_SLOT_FLAGS + 6].tolist() == [
         4,
@@ -312,3 +325,69 @@ def test_encode_observation_rejects_missing_actor() -> None:
 
     with pytest.raises(ValueError, match="Actor 5 not found"):
         encode_observation(state, actor_id=5)
+
+
+def test_entity_observation_mask_marks_present_entities() -> None:
+    actor = FighterArcher(Position(0, 0))
+    ally = WizardEvoker(Position(0, 2))
+    goblin = Goblin(Position(1, 0))
+    orc = Orc(Position(4, 0))
+    state = CombatState(
+        characters=[actor, ally, goblin, orc],
+        grid_map=GridMap(width=8, height=8),
+    )
+
+    observation = encode_entity_observation(state, actor_id=0)
+
+    assert observation.actor_features.shape == (ACTOR_FEATURE_SIZE,)
+    assert observation.entities_features.shape == (MAX_ENTITY_COUNT, ENTITY_FEATURE_SIZE)
+    assert GNN_NODE_FEATURE_SIZE == ENTITY_FEATURE_SIZE
+    assert observation.entity_mask.shape == (MAX_ENTITY_COUNT,)
+    assert observation.global_features.shape == (ENTITY_GLOBAL_FEATURE_SIZE,)
+    assert observation.entity_mask.tolist() == [1, 0, 0, 0, 1, 1, 0, 0]
+    assert observation.global_features[-1] == 0
+    assert observation.entities_features[0, -1] == 1
+
+
+def test_entity_observation_map_features_have_stable_size() -> None:
+    actor = FighterArcher(Position(2, 2))
+    goblin = Goblin(Position(4, 2))
+    state = CombatState(
+        characters=[actor, goblin],
+        grid_map=GridMap(
+            width=5,
+            height=5,
+            terrain_grid=[
+                [TerrainType.NORMAL] * 5,
+                [TerrainType.NORMAL, TerrainType.LOW_COVER, TerrainType.NORMAL, TerrainType.NORMAL, TerrainType.NORMAL],
+                [TerrainType.NORMAL, TerrainType.NORMAL, TerrainType.BLOCKED, TerrainType.NORMAL, TerrainType.NORMAL],
+                [TerrainType.NORMAL, TerrainType.NORMAL, TerrainType.NORMAL, TerrainType.HIGH_COVER, TerrainType.NORMAL],
+                [TerrainType.NORMAL] * 5,
+            ],
+        ),
+    )
+
+    observation = encode_entity_observation(state, actor_id=0)
+
+    assert observation.map_features.shape == (LOCAL_MAP_CELL_COUNT, MAP_CELL_FEATURE_SIZE)
+    assert torch.count_nonzero(observation.map_features[:, -5]) >= 1
+    assert torch.count_nonzero(observation.map_features[:, -4]) >= 2
+
+
+def test_flatten_entity_observation_is_mlp_compatible() -> None:
+    state = CombatState(
+        characters=[
+            FighterArcher(Position(0, 0)),
+            Goblin(Position(1, 0)),
+        ],
+        grid_map=GridMap(width=8, height=8),
+    )
+    entity_observation = encode_entity_observation(state, actor_id=0)
+
+    flattened = flatten_entity_observation(entity_observation)
+
+    assert flattened.shape == (OBSERVATION_SIZE,)
+    assert torch.equal(flattened, encode_observation(state, actor_id=0))
+    model = PPOActorCritic(target_count=4, move_count=64, hidden_sizes=(16,))
+    output = model(flattened)
+    assert output["value"].shape == (1,)

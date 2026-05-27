@@ -121,7 +121,14 @@ from combat.damage import (
     normalize_damage_type_set,
 )
 from combat.environment import CombatEnvironment
-from combat.encounter_generator import EncounterGenerator
+from combat.encounter_generator import (
+    CURRICULUM_STAGES,
+    MAX_CURRICULUM_LEVEL,
+    CurriculumStage,
+    EncounterGenerator,
+    clamp_curriculum_level,
+    get_curriculum_stage,
+)
 from combat.features import (
     AbilityScoreImprovement,
     add_feat,
@@ -204,6 +211,14 @@ from combat.presets import (
     Orc,
     WizardEvoker,
     create_test_encounter,
+)
+from combat.evaluation_scenarios import (
+    EVALUATION_SCENARIOS,
+    EvaluationScenario,
+    get_evaluation_scenarios,
+    get_evaluation_scenarios_by_level,
+    get_scenario,
+    scenario_names,
 )
 from combat.rewards import (
     CombatReward,
@@ -305,6 +320,7 @@ __all__ = [
     "COMMON_ACTION_STABILIZE",
     "COMMON_ACTION_USE_OBJECT",
     "CR_XP_TABLE",
+    "CURRICULUM_STAGES",
     "CastSpellAction",
     "ChannelDivinityPreserveLifeAction",
     "Character",
@@ -321,6 +337,7 @@ __all__ = [
     "Condition",
     "ClericLifeSupport",
     "CoverType",
+    "CurriculumStage",
     "DAMAGE_TYPES",
     "DEFAULT_CANTRIPS",
     "DEFAULT_PREPARED_SPELLS",
@@ -330,7 +347,9 @@ __all__ = [
     "DodgeAction",
     "Enemy",
     "EndTurnAction",
+    "EVALUATION_SCENARIOS",
     "EncounterGenerator",
+    "EvaluationScenario",
     "FeatureDefinition",
     "FireElementalSimple",
     "FighterArcher",
@@ -353,6 +372,7 @@ __all__ = [
     "ItemDefinition",
     "ItemEffect",
     "ItemTargetType",
+    "MAX_CURRICULUM_LEVEL",
     "MoveAction",
     "OpportunityAttackAction",
     "OrcWarrior",
@@ -398,6 +418,7 @@ __all__ = [
     "can_cast_spell",
     "can_level_up",
     "can_use_feature_action",
+    "clamp_curriculum_level",
     "coerce_aoe_direction",
     "coerce_aoe_shape",
     "coerce_terrain_type",
@@ -418,10 +439,14 @@ __all__ = [
     "feature_resource_name",
     "fighting_style",
     "get_spell_definition",
+    "get_curriculum_stage",
+    "get_evaluation_scenarios",
+    "get_evaluation_scenarios_by_level",
     "get_level_for_xp",
     "get_item_definition",
     "get_proficiency_bonus",
     "get_xp_for_cr",
+    "get_scenario",
     "get_supported_item_definitions",
     "get_supported_spell_definitions",
     "handle_concentration_damage",
@@ -447,6 +472,7 @@ __all__ = [
     "roll_d20",
     "roll_initiative_check",
     "roll_initiative_order",
+    "scenario_names",
     "reset_turn_resources",
     "reset_resources",
     "reset_spell_slots",

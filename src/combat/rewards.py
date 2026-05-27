@@ -10,6 +10,13 @@ from dataclasses import dataclass, field
 import re
 from typing import Any
 
+from combat.damage import (
+    character_immunities,
+    character_resistances,
+    character_vulnerabilities,
+    coerce_damage_type,
+)
+from combat.items import item_damage_type
 from combat.models import CombatState, Position, Team
 
 
@@ -36,6 +43,16 @@ class RewardConfig:
     no_effect_action_penalty: float = 0.03
     friendly_fire_penalty: float = 0.05
     item_healing_reward: float = 0.05
+    spell_slot_penalty_per_level: float = 0.015
+    action_surge_penalty: float = 0.03
+    ineffective_second_wind_penalty: float = 0.04
+    resource_overkill_penalty: float = 0.05
+    immunity_damage_penalty: float = 0.08
+    resisted_damage_penalty: float = 0.03
+    effective_resource_reward: float = 0.15
+    cover_avoid_damage_reward: float = 0.05
+    bad_position_penalty: float = 0.04
+    wasted_item_penalty: float = 0.04
 
 
 @dataclass(frozen=True)
@@ -65,6 +82,14 @@ class CharacterRewardSnapshot:
     grappled_by: int | None
     max_weapon_range: int
     weapon_damage_potential: int
+    resources: dict[str, int] = field(default_factory=dict)
+    spell_slots_remaining: dict[int, int] = field(default_factory=dict)
+    item_quantities: dict[str, int] = field(default_factory=dict)
+    damage_resistances: frozenset[str] = frozenset()
+    damage_immunities: frozenset[str] = frozenset()
+    damage_vulnerabilities: frozenset[str] = frozenset()
+    available_damage_types: frozenset[str] = frozenset()
+    cover_from_enemies: int = 0
 
 
 @dataclass(frozen=True)
@@ -137,6 +162,27 @@ def snapshot_combat_state(state: CombatState) -> CombatRewardSnapshot:
                     (_damage_potential(weapon.damage) for weapon in character.weapons),
                     default=0,
                 ),
+                resources={
+                    name: int(resource.uses_remaining or 0)
+                    for name, resource in character.resources.items()
+                },
+                spell_slots_remaining={
+                    int(level): int(count)
+                    for level, count in character.spell_slots_remaining.items()
+                },
+                item_quantities={
+                    _lookup_key(getattr(item, "name", item)): int(
+                        getattr(item, "quantity", 0)
+                    )
+                    for item in getattr(character, "inventory", ())
+                },
+                damage_resistances=_damage_type_names(character_resistances(character)),
+                damage_immunities=_damage_type_names(character_immunities(character)),
+                damage_vulnerabilities=_damage_type_names(
+                    character_vulnerabilities(character)
+                ),
+                available_damage_types=_available_damage_type_names(character),
+                cover_from_enemies=_max_cover_from_enemies(state, character),
             )
         )
 
@@ -194,6 +240,16 @@ def calculate_combat_reward(
         "no_effect_action": 0.0,
         "friendly_fire": 0.0,
         "item_healing": 0.0,
+        "spell_slot_spent": 0.0,
+        "action_surge_spent": 0.0,
+        "ineffective_second_wind": 0.0,
+        "resource_overkill": 0.0,
+        "immunity_damage": 0.0,
+        "resisted_damage": 0.0,
+        "effective_resource": 0.0,
+        "cover_avoid_damage": 0.0,
+        "bad_position": 0.0,
+        "wasted_item": 0.0,
     }
 
     if action is not None and action_success:
@@ -220,6 +276,8 @@ def calculate_combat_reward(
         or ally_deaths > 0
         or after.winner is not None
         or any(value > 0 for key, value in breakdown.items() if key.startswith("tactical_"))
+        or breakdown["effective_resource"] > 0
+        or breakdown["cover_avoid_damage"] > 0
         or breakdown["item_healing"] > 0
     )
     if action_success and not has_meaningful_event:
@@ -263,7 +321,28 @@ def _common_action_rewards(
         "no_effect_action": 0.0,
         "friendly_fire": 0.0,
         "item_healing": 0.0,
+        "spell_slot_spent": 0.0,
+        "action_surge_spent": 0.0,
+        "ineffective_second_wind": 0.0,
+        "resource_overkill": 0.0,
+        "immunity_damage": 0.0,
+        "resisted_damage": 0.0,
+        "effective_resource": 0.0,
+        "cover_avoid_damage": 0.0,
+        "bad_position": 0.0,
+        "wasted_item": 0.0,
     }
+
+    actor_before = _character(before, getattr(action, "actor_id", -1))
+    actor_after = _character(after, getattr(action, "actor_id", -1))
+    spell_slot_levels = _spent_spell_slot_levels(actor_before, actor_after)
+    expensive_resource_spent = bool(spell_slot_levels)
+
+    if spell_slot_levels:
+        rewards["spell_slot_spent"] = -sum(
+            level * config.spell_slot_penalty_per_level
+            for level in spell_slot_levels
+        )
 
     if action_name in {"CastSpellAction", "UseObjectAction"}:
         ally_damage = _team_damage_taken(before, after, actor_team)
@@ -276,6 +355,41 @@ def _common_action_rewards(
             )
             if ally_healing > 0:
                 rewards["item_healing"] = ally_healing * config.item_healing_reward
+            if _item_spent_without_effect(before, after, actor_team, action):
+                rewards["wasted_item"] = -config.wasted_item_penalty
+
+    action_surge_spent = _resource_spent(actor_before, actor_after, "action_surge")
+    second_wind_spent = _resource_spent(actor_before, actor_after, "second_wind")
+    channel_divinity_spent = _resource_spent(
+        actor_before,
+        actor_after,
+        "channel_divinity",
+    )
+    item_spent = _item_spent(actor_before, actor_after)
+    if action_surge_spent:
+        rewards["action_surge_spent"] = -config.action_surge_penalty
+        expensive_resource_spent = True
+    if channel_divinity_spent or item_spent:
+        expensive_resource_spent = True
+    if second_wind_spent and _second_wind_was_inefficient(before, after, action):
+        rewards["ineffective_second_wind"] = -config.ineffective_second_wind_penalty
+
+    chosen_damage_type = _action_damage_type(action)
+    target_before = _primary_target(before, action)
+    if chosen_damage_type is not None and target_before is not None:
+        if chosen_damage_type in target_before.damage_immunities:
+            rewards["immunity_damage"] = -config.immunity_damage_penalty
+        elif (
+            chosen_damage_type in target_before.damage_resistances
+            and _has_better_damage_alternative(actor_before, target_before, chosen_damage_type)
+        ):
+            rewards["resisted_damage"] = -config.resisted_damage_penalty
+
+    if expensive_resource_spent:
+        if _resource_use_was_effective(before, after, actor_team):
+            rewards["effective_resource"] = config.effective_resource_reward
+        if _expensive_resource_overkilled(before, action, action_result):
+            rewards["resource_overkill"] = -config.resource_overkill_penalty
 
     if action_name == "GrappleAction":
         if _successful_tactical_grapple(before, after, actor_team, action):
@@ -286,6 +400,8 @@ def _common_action_rewards(
     elif action_name == "AttackAction":
         if _dodging_ally_avoided_attack(before, after, actor_team, action, action_result):
             rewards["tactical_dodge"] = config.tactical_dodge_reward
+        if _covered_ally_avoided_attack(before, after, actor_team, action, action_result):
+            rewards["cover_avoid_damage"] = config.cover_avoid_damage_reward
         if _helped_attack_hit(before, after, actor_team, action):
             rewards["tactical_help"] = config.tactical_help_reward
     elif action_name == "DisengageAction":
@@ -302,8 +418,237 @@ def _common_action_rewards(
     elif action_name in {"UseObjectAction", "ImprovisedAction"}:
         if not _action_had_state_effect(before, after, actor_team):
             rewards["no_effect_action"] = -config.no_effect_action_penalty
+    elif action_name == "MoveAction":
+        if _moved_to_bad_position(before, after, actor_team, action):
+            rewards["bad_position"] = -config.bad_position_penalty
 
     return rewards
+
+
+def format_reward_breakdown(reward: CombatReward) -> str:
+    """Return a compact log line with non-zero reward components."""
+
+    components = [
+        f"{key}={value:.3f}"
+        for key, value in sorted(reward.breakdown.items())
+        if abs(value) > 1.0e-9
+    ]
+    component_text = ", ".join(components) if components else "none"
+    return f"Reward breakdown: total={reward.total:.3f}; {component_text}"
+
+
+def _spent_spell_slot_levels(
+    actor_before: CharacterRewardSnapshot | None,
+    actor_after: CharacterRewardSnapshot | None,
+) -> list[int]:
+    if actor_before is None or actor_after is None:
+        return []
+    spent_levels: list[int] = []
+    for level, before_count in actor_before.spell_slots_remaining.items():
+        after_count = actor_after.spell_slots_remaining.get(level, 0)
+        spent = max(0, before_count - after_count)
+        spent_levels.extend([level] * spent)
+    return spent_levels
+
+
+def _resource_spent(
+    actor_before: CharacterRewardSnapshot | None,
+    actor_after: CharacterRewardSnapshot | None,
+    resource_name: str,
+) -> bool:
+    if actor_before is None or actor_after is None:
+        return False
+    before_count = actor_before.resources.get(resource_name, 0)
+    after_count = actor_after.resources.get(resource_name, 0)
+    return after_count < before_count
+
+
+def _second_wind_was_inefficient(
+    before: CombatRewardSnapshot,
+    after: CombatRewardSnapshot,
+    action: Any,
+) -> bool:
+    actor_before = _character(before, getattr(action, "actor_id", -1))
+    actor_after = _character(after, getattr(action, "actor_id", -1))
+    if actor_before is None or actor_after is None:
+        return False
+    healed = max(0, actor_after.hp - actor_before.hp)
+    return healed <= 2 or _hp_ratio(actor_before) >= 0.8
+
+
+def _primary_target(
+    snapshot: CombatRewardSnapshot,
+    action: Any,
+) -> CharacterRewardSnapshot | None:
+    target_id = getattr(action, "target_id", None)
+    if target_id is None:
+        return None
+    return _character(snapshot, int(target_id))
+
+
+def _action_damage_type(action: Any) -> str | None:
+    weapon = getattr(action, "weapon", None)
+    spell = getattr(action, "spell", None)
+    item = getattr(action, "item", None)
+    damage_type = None
+    if weapon is not None:
+        damage_type = getattr(weapon, "damage_type", None)
+    elif spell is not None:
+        damage_type = getattr(spell, "damage_type", None)
+    elif item is not None:
+        damage_type = item_damage_type(item)
+
+    normalized = coerce_damage_type(damage_type)
+    return normalized.value if normalized is not None else None
+
+
+def _has_better_damage_alternative(
+    actor: CharacterRewardSnapshot | None,
+    target: CharacterRewardSnapshot,
+    chosen_damage_type: str,
+) -> bool:
+    if actor is None:
+        return False
+    for damage_type in actor.available_damage_types:
+        if damage_type == chosen_damage_type:
+            continue
+        if damage_type not in target.damage_resistances and damage_type not in target.damage_immunities:
+            return True
+    return False
+
+
+def _resource_use_was_effective(
+    before: CombatRewardSnapshot,
+    after: CombatRewardSnapshot,
+    actor_team: Team,
+) -> bool:
+    enemy_team = opposing_team(actor_team)
+    enemy_kills = before.alive_by_team[enemy_team] > after.alive_by_team[enemy_team]
+    victory = after.winner is actor_team
+    ally_saved = any(
+        before_character.team is actor_team
+        and after_character.team is actor_team
+        and before_character.hp <= max(1, before_character.max_hp // 4)
+        and after_character.hp > before_character.hp
+        and after_character.alive
+        for before_character, after_character in zip(before.characters, after.characters)
+    )
+    return enemy_kills or victory or ally_saved
+
+
+def _expensive_resource_overkilled(
+    before: CombatRewardSnapshot,
+    action: Any,
+    action_result: Any | None,
+) -> bool:
+    target_before = _primary_target(before, action)
+    if target_before is None or target_before.hp <= 0:
+        return False
+    damage_values = _result_damage_values(action_result)
+    if not damage_values:
+        return False
+    return max(damage_values) >= target_before.hp + max(6, target_before.max_hp // 2)
+
+
+def _item_spent_without_effect(
+    before: CombatRewardSnapshot,
+    after: CombatRewardSnapshot,
+    actor_team: Team,
+    action: Any,
+) -> bool:
+    actor_before = _character(before, getattr(action, "actor_id", -1))
+    actor_after = _character(after, getattr(action, "actor_id", -1))
+    if actor_before is None or actor_after is None:
+        return False
+    if not _item_spent(actor_before, actor_after):
+        return False
+    return not _action_had_state_effect(before, after, actor_team)
+
+
+def _item_spent(
+    actor_before: CharacterRewardSnapshot | None,
+    actor_after: CharacterRewardSnapshot | None,
+) -> bool:
+    if actor_before is None or actor_after is None:
+        return False
+    return any(
+        actor_after.item_quantities.get(name, 0) < before_count
+        for name, before_count in actor_before.item_quantities.items()
+    )
+
+
+def _covered_ally_avoided_attack(
+    before: CombatRewardSnapshot,
+    after: CombatRewardSnapshot,
+    actor_team: Team,
+    action: Any,
+    action_result: Any | None,
+) -> bool:
+    target_before = _character(before, getattr(action, "target_id", -1))
+    target_after = _character(after, getattr(action, "target_id", -1))
+    if target_before is None or target_after is None:
+        return False
+    return (
+        target_before.team is actor_team
+        and target_before.cover_from_enemies > 0
+        and target_after.hp == target_before.hp
+        and _result_mentions(action_result, "miss")
+    )
+
+
+def _moved_to_bad_position(
+    before: CombatRewardSnapshot,
+    after: CombatRewardSnapshot,
+    actor_team: Team,
+    action: Any,
+) -> bool:
+    actor_before = _character(before, getattr(action, "actor_id", -1))
+    actor_after = _character(after, getattr(action, "actor_id", -1))
+    if actor_before is None or actor_after is None or actor_before.team is not actor_team:
+        return False
+    if actor_before.position == actor_after.position:
+        return False
+
+    adjacent_before = _adjacent_enemy_count(before, actor_before)
+    adjacent_after = _adjacent_enemy_count(after, actor_after)
+    cover_worse = actor_after.cover_from_enemies < actor_before.cover_from_enemies
+    entered_threat = adjacent_after > adjacent_before
+    improved_attack = _movement_improved_attack_position(
+        before,
+        after,
+        actor_team,
+        actor_before,
+        actor_after,
+    )
+    return (entered_threat or cover_worse) and not improved_attack
+
+
+def _movement_improved_attack_position(
+    before: CombatRewardSnapshot,
+    after: CombatRewardSnapshot,
+    actor_team: Team,
+    actor_before: CharacterRewardSnapshot,
+    actor_after: CharacterRewardSnapshot,
+) -> bool:
+    before_targets = _attackable_enemy_count(before, actor_team, actor_before)
+    after_targets = _attackable_enemy_count(after, actor_team, actor_after)
+    return after_targets > before_targets
+
+
+def _attackable_enemy_count(
+    snapshot: CombatRewardSnapshot,
+    actor_team: Team,
+    actor: CharacterRewardSnapshot,
+) -> int:
+    if actor.max_weapon_range <= 0:
+        return 0
+    return sum(
+        1
+        for enemy in snapshot.characters
+        if enemy.team is opposing_team(actor_team)
+        and enemy.alive
+        and _distance(actor.position, enemy.position) <= actor.max_weapon_range
+    )
 
 
 def _successful_tactical_grapple(
@@ -533,6 +878,68 @@ def _distance(first: Position, second: Position) -> int:
 def _result_mentions(action_result: Any | None, text: str) -> bool:
     description = str(getattr(action_result, "description", "")).lower()
     return text.lower() in description
+
+
+def _result_damage_values(action_result: Any | None) -> list[int]:
+    description = str(getattr(action_result, "description", "")).lower()
+    values = [
+        int(match.group(1))
+        for match in re.finditer(r"\bfor\s+(\d+)\s+damage\b", description)
+    ]
+    values.extend(
+        int(match.group(1))
+        for match in re.finditer(r"\btotal damage:\s*(\d+)\b", description)
+    )
+    return values
+
+
+def _damage_type_names(damage_types: set[object]) -> frozenset[str]:
+    return frozenset(
+        damage_type.value
+        for value in damage_types
+        for damage_type in (coerce_damage_type(value),)
+        if damage_type is not None
+    )
+
+
+def _available_damage_type_names(character: Any) -> frozenset[str]:
+    damage_types = []
+    for weapon in getattr(character, "weapons", ()):
+        damage_types.append(getattr(weapon, "damage_type", None))
+    for spell in (
+        *tuple(getattr(character, "cantrips", ()) or ()),
+        *tuple(getattr(character, "prepared_spells", ()) or ()),
+        *tuple(getattr(character, "abilities", ()) or ()),
+    ):
+        damage_types.append(getattr(spell, "damage_type", None))
+    for item in getattr(character, "inventory", ()) or ():
+        damage_types.append(item_damage_type(item))
+    return _damage_type_names(set(damage_types))
+
+
+def _max_cover_from_enemies(state: CombatState, character: Any) -> int:
+    grid_map = state.grid_map
+    if grid_map is None:
+        return 0
+    cover_values = [
+        _cover_value(grid_map.get_cover_between(enemy.position, character.position))
+        for enemy in state.characters
+        if enemy is not character and enemy.team is not character.team and enemy.is_alive
+    ]
+    return max(cover_values, default=0)
+
+
+def _cover_value(cover: Any) -> int:
+    return {
+        "NO_COVER": 0,
+        "HALF_COVER": 1,
+        "THREE_QUARTERS_COVER": 2,
+        "FULL_COVER": 3,
+    }.get(getattr(cover, "name", ""), 0)
+
+
+def _lookup_key(value: object) -> str:
+    return "".join(character for character in str(value).casefold() if character.isalnum())
 
 
 def _damage_potential(damage: int | str) -> int:

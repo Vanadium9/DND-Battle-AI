@@ -34,3 +34,12 @@ class PPOConfig:
     invalid_action_penalty: float = -0.25
     step_penalty: float = -0.001
     checkpoint_dir: str = "checkpoints"
+    model_type: str = "mlp"
+    centralized_critic: bool = False
+
+    def __post_init__(self) -> None:
+        normalized_model_type = str(self.model_type).strip().lower()
+        if normalized_model_type not in {"mlp", "gnn"}:
+            raise ValueError("model_type must be 'mlp' or 'gnn'")
+        self.model_type = normalized_model_type
+        self.centralized_critic = bool(self.centralized_critic)

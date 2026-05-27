@@ -1,8 +1,11 @@
 from combat import (
+    CURRICULUM_STAGES,
     CombatEnvironment,
     CombatState,
     EncounterGenerator,
+    MAX_CURRICULUM_LEVEL,
     Team,
+    TerrainType,
 )
 
 
@@ -69,3 +72,45 @@ def test_encounter_generator_generate_switches_return_type() -> None:
 
     assert isinstance(combat_state, CombatState)
     assert isinstance(environment, CombatEnvironment)
+
+
+def test_curriculum_stages_cover_expected_difficulty_levels() -> None:
+    assert len(CURRICULUM_STAGES) == 9
+    assert MAX_CURRICULUM_LEVEL == 9
+    assert [stage.level for stage in CURRICULUM_STAGES] == list(range(1, 10))
+
+
+def test_curriculum_level_generates_fixed_encounter() -> None:
+    generator = EncounterGenerator(seed=3, curriculum_level=2)
+
+    combat_state = generator.generate_state()
+    players = combat_state.characters_for_team(Team.PLAYERS)
+    enemies = combat_state.characters_for_team(Team.ENEMIES)
+
+    assert len(players) == 1
+    assert players[0].name == "Fighter Level 1 Basic"
+    assert players[0].level == 1
+    assert len(enemies) == 2
+    assert {enemy.name for enemy in enemies} == {"Goblin Melee", "Goblin Archer"}
+
+
+def test_curriculum_map_levels_include_cover_obstacles_and_difficult_terrain() -> None:
+    generator = EncounterGenerator(seed=4)
+
+    cover_state = generator.generate_curriculum_state(8)
+    difficult_state = generator.generate_curriculum_state(9)
+    cover_terrain = {
+        terrain
+        for row in cover_state.grid_map.terrain_grid
+        for terrain in row
+    }
+    difficult_terrain = {
+        terrain
+        for row in difficult_state.grid_map.terrain_grid
+        for terrain in row
+    }
+
+    assert TerrainType.BLOCKED in cover_terrain
+    assert TerrainType.LOW_COVER in cover_terrain
+    assert TerrainType.HIGH_COVER in cover_terrain
+    assert TerrainType.DIFFICULT_TERRAIN in difficult_terrain

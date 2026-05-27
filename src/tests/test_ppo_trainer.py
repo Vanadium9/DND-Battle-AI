@@ -2,10 +2,16 @@ from pathlib import Path
 
 import torch
 
-from agents import ACTION_CATEGORY_COUNT, MAIN_ACTION_TYPE_COUNT, PPOActorCritic
-from combat import CombatEnvironment, FighterArcher, Goblin, GridMap, Position
+from agents import (
+    ACTION_CATEGORY_COUNT,
+    MAIN_ACTION_TYPE_COUNT,
+    GNNPPOActorCritic,
+    HEAD_ORDER,
+    PPOActorCritic,
+)
+from combat import CombatEnvironment, EncounterGenerator, FighterArcher, Goblin, GridMap, Position, Team
 from configs import PPOConfig
-from training import PPOTrainer, RolloutBuffer
+from training import CurriculumConfig, PPOTrainer, RolloutBuffer, load_curriculum_config
 
 
 CHECKPOINT_DIR = Path("checkpoints") / "test_ppo_trainer"
@@ -28,6 +34,47 @@ def make_trainer(rollout_steps: int = 4) -> PPOTrainer:
         minibatch_size=2,
         learning_rate=1.0e-3,
         checkpoint_dir=str(CHECKPOINT_DIR),
+    )
+    return PPOTrainer(environment=environment, model=model, config=config)
+
+
+def make_gnn_trainer(
+    *,
+    centralized_critic: bool,
+    rollout_steps: int = 2,
+) -> PPOTrainer:
+    environment = CombatEnvironment(
+        characters=[
+            FighterArcher(Position(0, 0)),
+            Goblin(Position(1, 0)),
+        ],
+        grid_map=GridMap(width=8, height=8),
+        use_initiative=False,
+        log_to_console=False,
+    )
+    model = GNNPPOActorCritic(
+        target_count=6,
+        move_count=64,
+        option_count=8,
+        bonus_action_type_count=4,
+        reaction_type_count=4,
+        class_feature_count=4,
+        spell_count=4,
+        slot_level_count=4,
+        item_count=4,
+        gnn_hidden_size=16,
+        policy_hidden_size=32,
+        context_hidden_sizes=(),
+        message_passing_steps=1,
+    )
+    config = PPOConfig(
+        rollout_steps=rollout_steps,
+        update_epochs=1,
+        minibatch_size=2,
+        learning_rate=1.0e-3,
+        checkpoint_dir=str(CHECKPOINT_DIR),
+        model_type="gnn",
+        centralized_critic=centralized_critic,
     )
     return PPOTrainer(environment=environment, model=model, config=config)
 
@@ -103,6 +150,37 @@ def test_update_runs_ppo_objective() -> None:
     assert all(torch.isfinite(torch.tensor(value)) for value in metrics.values())
 
 
+def test_gnn_trainer_runs_with_centralized_critic_enabled() -> None:
+    trainer = make_gnn_trainer(centralized_critic=True)
+    rollout = trainer.collect_rollout()
+
+    data = rollout.to_tensors(torch.device("cpu"))
+    metrics = trainer.update(rollout)
+
+    assert len(rollout.actor_observations) == len(rollout)
+    assert len(rollout.critic_observations) == len(rollout)
+    assert {"actor_features", "entities_features", "entity_mask"}.issubset(
+        data["actor_observations"]
+    )
+    assert {"actor_features", "entities_features", "entity_mask"}.issubset(
+        data["critic_observations"]
+    )
+    assert set(HEAD_ORDER).issubset(data["actions"])
+    assert all(torch.isfinite(torch.tensor(value)) for value in metrics.values())
+
+
+def test_gnn_trainer_runs_with_centralized_critic_disabled() -> None:
+    trainer = make_gnn_trainer(centralized_critic=False)
+    rollout = trainer.collect_rollout()
+
+    metrics = trainer.update(rollout)
+
+    assert len(rollout.actor_observations) == len(rollout)
+    assert len(rollout.critic_observations) == len(rollout)
+    assert set(HEAD_ORDER).issubset(rollout.actions)
+    assert all(torch.isfinite(torch.tensor(value)) for value in metrics.values())
+
+
 def test_train_iteration_saves_checkpoint() -> None:
     trainer = make_trainer(rollout_steps=4)
 
@@ -112,3 +190,69 @@ def test_train_iteration_saves_checkpoint() -> None:
     assert checkpoint_path.exists()
     assert checkpoint_path.parent == CHECKPOINT_DIR
     assert checkpoint_path.name == "test_model.pt"
+
+
+def test_curriculum_level_advances_at_win_rate_threshold() -> None:
+    generator = EncounterGenerator(seed=21, curriculum_level=1)
+    environment = generator.generate_curriculum_environment(log_to_console=False)
+    trainer = PPOTrainer(
+        environment=environment,
+        model=PPOActorCritic(target_count=6, move_count=64, hidden_sizes=(32,)),
+        config=PPOConfig(rollout_steps=2, checkpoint_dir=str(CHECKPOINT_DIR)),
+        encounter_generator=generator,
+        curriculum_config=CurriculumConfig(
+            enabled=True,
+            initial_level=1,
+            max_level=3,
+            win_rate_threshold=1.0,
+            window_size=2,
+        ),
+    )
+
+    trainer.record_curriculum_result(Team.PLAYERS)
+    assert trainer.curriculum_level == 1
+
+    trainer.record_curriculum_result(Team.PLAYERS)
+
+    assert trainer.curriculum_level == 2
+    assert generator.curriculum_level == 2
+    assert trainer.curriculum_recent_wins == []
+    assert "Curriculum advanced from level 1" in trainer.curriculum_transition_log[-1]
+
+
+def test_curriculum_state_is_saved_in_checkpoint() -> None:
+    generator = EncounterGenerator(seed=22, curriculum_level=1)
+    environment = generator.generate_curriculum_environment(log_to_console=False)
+    trainer = PPOTrainer(
+        environment=environment,
+        model=PPOActorCritic(target_count=6, move_count=64, hidden_sizes=(32,)),
+        config=PPOConfig(rollout_steps=2, checkpoint_dir=str(CHECKPOINT_DIR)),
+        encounter_generator=generator,
+        curriculum_config=CurriculumConfig(
+            enabled=True,
+            initial_level=1,
+            max_level=3,
+            win_rate_threshold=1.0,
+            window_size=1,
+        ),
+    )
+    trainer.record_curriculum_result(Team.PLAYERS)
+
+    checkpoint_path = trainer.save_checkpoint("curriculum_model.pt")
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+
+    assert checkpoint["curriculum_level"] == 2
+    assert checkpoint["curriculum_state"]["enabled"] is True
+    assert checkpoint["curriculum_state"]["current_level"] == 2
+    assert checkpoint["curriculum_state"]["transition_log"]
+
+
+def test_train_curriculum_config_loads_from_yaml() -> None:
+    config_path = Path(__file__).resolve().parents[2] / "configs" / "train_curriculum.yaml"
+
+    config = load_curriculum_config(config_path)
+
+    assert config.enabled is True
+    assert config.initial_level == 1
+    assert config.max_level == 9
+    assert config.win_rate_threshold == 0.75

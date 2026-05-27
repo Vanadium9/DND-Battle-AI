@@ -1,0 +1,24 @@
+enabled: true
+initial_level: 1
+max_level: 9
+win_rate_threshold: 0.75
+window_size: 20
+levels:
+  - level: 1
+    name: 1 Fighter level 1 vs 1 Goblin
+  - level: 2
+    name: 1 Fighter level 1 vs 2 Goblins
+  - level: 3
+    name: Fighter level 3 Champion vs Orc
+  - level: 4
+    name: Fighter + Cleric vs Orc + Goblins
+  - level: 5
+    name: Wizard scenarios
+  - level: 6
+    name: mixed party vs mixed enemies
+  - level: 7
+    name: enemies with resistances/immunities
+  - level: 8
+    name: maps with obstacles and cover
+  - level: 9
+    name: maps with difficult terrain and ranged enemies

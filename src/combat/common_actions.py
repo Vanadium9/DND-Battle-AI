@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import random
 import re
 
@@ -98,6 +98,7 @@ class ActionResult:
     success: bool
     description: str
     reward: float = 0.0
+    reward_breakdown: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass

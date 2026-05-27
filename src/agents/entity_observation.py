@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Iterable
+
+import torch
 
 from combat.cover import CoverType
 from combat.damage import DamageType, coerce_damage_type
 from combat.inventory import available_inventory_items, get_supported_item_definitions
 from combat.items import item_damage_type
-from combat.models import Character, CombatState, Position
+from combat.models import Character, CombatState, Position, Team
 from combat.spellcasting import SUPPORTED_SPELLS
 from combat.terrain import TerrainType
 from rules.feats import ABILITY_SCORE_IMPROVEMENT_NAME, GRAPPLER_NAME
@@ -31,16 +34,34 @@ PREPARED_SPELL_FLAG_NAMES: tuple[str, ...] = tuple(
 INVENTORY_ITEM_FLAG_NAMES: tuple[str, ...] = tuple(
     definition.name for definition in get_supported_item_definitions()
 )
-MONSTER_ROLE_ID_NAMES: tuple[str, ...] = (
-    "combatant",
-    "melee_skirmisher",
-    "ranged_skirmisher",
-    "brute",
-    "ranged_undead",
-    "melee_humanoid",
-    "fast_melee",
-    "elemental_striker",
+COMBAT_ROLE_NAMES: tuple[str, ...] = (
+    "MELEE_DAMAGE",
+    "RANGED_DAMAGE",
+    "TANK",
+    "SUPPORT",
+    "CASTER",
+    "BRUTE_ENEMY",
+    "SKIRMISHER_ENEMY",
 )
+MONSTER_ROLE_ID_NAMES = COMBAT_ROLE_NAMES
+ROLE_NAME_ALIASES: dict[str, str] = {
+    "meleeskirmisher": "SKIRMISHER_ENEMY",
+    "rangedskirmisher": "SKIRMISHER_ENEMY",
+    "rangedundead": "SKIRMISHER_ENEMY",
+    "fastranged": "SKIRMISHER_ENEMY",
+    "fastmelee": "SKIRMISHER_ENEMY",
+    "meleehumanoid": "SKIRMISHER_ENEMY",
+    "skirmisherenemy": "SKIRMISHER_ENEMY",
+    "brute": "BRUTE_ENEMY",
+    "elementalstriker": "BRUTE_ENEMY",
+    "bruteenemies": "BRUTE_ENEMY",
+    "bruteenemy": "BRUTE_ENEMY",
+    "meleedamage": "MELEE_DAMAGE",
+    "rangeddamage": "RANGED_DAMAGE",
+    "tank": "TANK",
+    "support": "SUPPORT",
+    "caster": "CASTER",
+}
 CONDITION_FLAG_NAMES: tuple[str, ...] = (
     "prone",
     "grappled",
@@ -53,6 +74,22 @@ CONDITION_FLAG_NAMES: tuple[str, ...] = (
 )
 TERRAIN_FEATURE_TYPES: tuple[TerrainType, ...] = tuple(TerrainType)
 DAMAGE_PROFILE_TYPES: tuple[DamageType, ...] = tuple(DamageType)
+LOCAL_MAP_RADIUS = 2
+LOCAL_MAP_WIDTH = LOCAL_MAP_RADIUS * 2 + 1
+LOCAL_MAP_CELL_COUNT = LOCAL_MAP_WIDTH * LOCAL_MAP_WIDTH
+MAP_CELL_FEATURE_SIZE = len(TERRAIN_FEATURE_TYPES) + 5
+MAP_FEATURE_SIZE = LOCAL_MAP_CELL_COUNT * MAP_CELL_FEATURE_SIZE
+
+
+@dataclass(frozen=True)
+class EntityObservation:
+    """Structured observation tensors for entity-based policies."""
+
+    actor_features: torch.Tensor
+    entities_features: torch.Tensor
+    map_features: torch.Tensor
+    global_features: torch.Tensor
+    entity_mask: torch.Tensor
 
 
 def lookup_id(value: object, names: tuple[str, ...]) -> float:
@@ -80,7 +117,31 @@ def race_id(character: Character) -> float:
 
 
 def role_id(character: Character) -> float:
-    return lookup_id(getattr(character, "role", None), MONSTER_ROLE_ID_NAMES)
+    return lookup_id(combat_role_name(character), COMBAT_ROLE_NAMES)
+
+
+def combat_role_name(character: Character) -> str:
+    """Infer a coarse combat role from explicit role, team and capabilities."""
+
+    explicit_role = ROLE_NAME_ALIASES.get(lookup_key(getattr(character, "role", "")))
+    if explicit_role is not None:
+        return explicit_role
+
+    if character.team is Team.ENEMIES:
+        if _is_enemy_brute(character):
+            return "BRUTE_ENEMY"
+        return "SKIRMISHER_ENEMY"
+
+    class_key = lookup_key(getattr(character, "class_name", ""))
+    if class_key == "cleric" or _has_healing_spell(character):
+        return "SUPPORT"
+    if class_key == "wizard" or _has_damaging_spell(character):
+        return "CASTER"
+    if _has_ranged_weapon(character) and not _has_melee_weapon(character):
+        return "RANGED_DAMAGE"
+    if int(getattr(character, "ac", 0)) >= 18:
+        return "TANK"
+    return "MELEE_DAMAGE"
 
 
 def normalized_level(character: Character) -> float:
@@ -409,6 +470,44 @@ def _best_damage_estimate(character: Character) -> float:
         for item in available_inventory_items(character)
     ]
     return max((*weapon_damage, *spell_damage, *item_damage, 0.0))
+
+
+def _is_enemy_brute(character: Character) -> bool:
+    return (
+        int(getattr(character, "max_hp", 0)) >= 18
+        or int(getattr(getattr(character, "stats", None), "str", 10)) >= 16
+        or _cr_to_float(getattr(character, "challenge_rating", 0)) >= 1.0
+    )
+
+
+def _has_melee_weapon(character: Character) -> bool:
+    return any(int(getattr(weapon, "range", 1)) <= 1 for weapon in getattr(character, "weapons", ()))
+
+
+def _has_ranged_weapon(character: Character) -> bool:
+    return any(int(getattr(weapon, "range", 1)) > 1 for weapon in getattr(character, "weapons", ()))
+
+
+def _has_healing_spell(character: Character) -> bool:
+    return any(
+        getattr(spell, "healing", None) is not None
+        for spell in (
+            *tuple(getattr(character, "cantrips", ()) or ()),
+            *tuple(getattr(character, "prepared_spells", ()) or ()),
+            *tuple(getattr(character, "known_spells", ()) or ()),
+        )
+    )
+
+
+def _has_damaging_spell(character: Character) -> bool:
+    return any(
+        getattr(spell, "damage", None) is not None
+        for spell in (
+            *tuple(getattr(character, "cantrips", ()) or ()),
+            *tuple(getattr(character, "prepared_spells", ()) or ()),
+            *tuple(getattr(character, "known_spells", ()) or ()),
+        )
+    )
 
 
 def _numeric_damage_estimate(value: object) -> float:

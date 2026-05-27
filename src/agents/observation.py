@@ -40,8 +40,13 @@ from combat.spellcasting import (
 from combat.terrain import TerrainType
 from agents.entity_observation import (
     CONDITION_FLAG_NAMES,
+    EntityObservation,
     FEAT_FLAG_NAMES,
     INVENTORY_ITEM_FLAG_NAMES,
+    LOCAL_MAP_CELL_COUNT,
+    LOCAL_MAP_RADIUS,
+    MAP_CELL_FEATURE_SIZE,
+    MAP_FEATURE_SIZE,
     PREPARED_SPELL_FLAG_NAMES,
     TERRAIN_FEATURE_TYPES,
     active_concentration_flag,
@@ -70,6 +75,7 @@ from agents.entity_observation import (
 
 
 MAX_NEARBY_CHARACTERS = 4
+MAX_ENTITY_COUNT = MAX_NEARBY_CHARACTERS * 2
 BASE_CHARACTER_FEATURE_SIZE = 20
 DAMAGE_TYPE_FEATURE_SIZE = len(DAMAGE_TYPES)
 ACTOR_DAMAGE_ACTION_FEATURE_SIZE = DAMAGE_TYPE_FEATURE_SIZE
@@ -81,7 +87,7 @@ PREPARED_SPELL_FEATURE_SIZE = len(PREPARED_SPELL_FLAG_NAMES)
 INVENTORY_ITEM_FEATURE_SIZE = len(INVENTORY_ITEM_FLAG_NAMES)
 TERRAIN_AROUND_FEATURE_SIZE = 4 * len(TERRAIN_FEATURE_TYPES)
 ACTOR_REAL_GAME_FEATURE_SIZE = (
-    5
+    6
     + FEAT_FEATURE_SIZE
     + 4
     + CLASS_RESOURCE_FEATURE_SIZE
@@ -131,11 +137,21 @@ OBSERVATION_SIZE = (
     + GLOBAL_FEATURE_SIZE
 )
 PPO_INPUT_SIZE = OBSERVATION_SIZE
-GNN_NODE_FEATURE_SIZE = OTHER_CHARACTER_FEATURE_SIZE
+ENTITY_EXTRA_FEATURE_SIZE = 1
+ENTITY_FEATURE_SIZE = OTHER_CHARACTER_FEATURE_SIZE + ENTITY_EXTRA_FEATURE_SIZE
+GNN_NODE_FEATURE_SIZE = ENTITY_FEATURE_SIZE
+ENTITY_MASK_SIZE = MAX_ENTITY_COUNT
+ENTITY_GLOBAL_FEATURE_SIZE = GLOBAL_FEATURE_SIZE + 1
 
 
 def encode_observation(state: CombatState, actor_id: int) -> torch.Tensor:
-    """Encode combat state from one actor's perspective as a fixed vector."""
+    """Encode combat state as a flattened MLP-compatible observation vector."""
+
+    return flatten_entity_observation(encode_entity_observation(state, actor_id))
+
+
+def encode_entity_observation(state: CombatState, actor_id: int) -> EntityObservation:
+    """Encode combat state from one actor's perspective as entity-based tensors."""
 
     actor = state.character_at(actor_id)
     if actor is None:
@@ -160,13 +176,64 @@ def encode_observation(state: CombatState, actor_id: int) -> torch.Tensor:
         ),
     )
 
-    features = [
-        *_encode_actor(actor, actor_id, state),
-        *_encode_padded_group(allies, actor, state),
-        *_encode_padded_group(enemies, actor, state),
-        *global_feature_values(state, actor_id),
-    ]
-    return torch.tensor(features, dtype=torch.float32)
+    entity_rows, entity_mask = _encode_entity_rows(allies, enemies, actor, state)
+    return EntityObservation(
+        actor_features=torch.tensor(
+            _encode_actor(actor, actor_id, state),
+            dtype=torch.float32,
+        ),
+        entities_features=torch.tensor(entity_rows, dtype=torch.float32),
+        map_features=torch.tensor(_encode_map_features(state, actor), dtype=torch.float32),
+        global_features=torch.tensor(
+            _entity_global_feature_values(state, actor_id),
+            dtype=torch.float32,
+        ),
+        entity_mask=torch.tensor(entity_mask, dtype=torch.float32),
+    )
+
+
+def flatten_entity_observation(observation: EntityObservation) -> torch.Tensor:
+    """Flatten entity-based observations for the legacy MLP/PPO policy."""
+
+    return torch.cat(
+        (
+            observation.actor_features.reshape(-1),
+            observation.entities_features[:, :OTHER_CHARACTER_FEATURE_SIZE].reshape(-1),
+            observation.global_features[:GLOBAL_FEATURE_SIZE].reshape(-1),
+        ),
+        dim=0,
+    ).to(dtype=torch.float32)
+
+
+def _encode_entity_rows(
+    allies: list[tuple[int, Character]],
+    enemies: list[tuple[int, Character]],
+    actor: Character,
+    state: CombatState,
+) -> tuple[list[list[float]], list[float]]:
+    rows: list[list[float]] = []
+    mask: list[float] = []
+    for entries in (allies, enemies):
+        for index in range(MAX_NEARBY_CHARACTERS):
+            if index < len(entries):
+                _, character = entries[index]
+                rows.append(
+                    [
+                        *_encode_other_character(character, actor, state),
+                        float(_has_spells(character)),
+                    ]
+                )
+                mask.append(1.0)
+            else:
+                rows.append([0.0] * ENTITY_FEATURE_SIZE)
+                mask.append(0.0)
+    return rows, mask
+
+
+def _entity_global_feature_values(state: CombatState, actor_id: int) -> list[float]:
+    actor = state.character_at(actor_id)
+    current_team = 0.0 if actor is None or actor.team is Team.PLAYERS else 1.0
+    return [*global_feature_values(state, actor_id), current_team]
 
 
 def _encode_actor(
@@ -211,6 +278,7 @@ def _encode_actor_real_game_features(
         class_id(actor),
         subclass_id(actor),
         race_id(actor),
+        role_id(actor),
         *feat_flags(actor),
         float(actor.action_economy.action_available),
         float(actor.action_economy.bonus_action_available),
@@ -314,6 +382,38 @@ def _encode_other_map_features(
         float(_distance(actor.position, character.position, state)),
         reachable_by_actor(state, actor, character),
     ]
+
+
+def _encode_map_features(state: CombatState, actor: Character) -> list[list[float]]:
+    grid_map = state.grid_map
+    reachable_costs = _reachable_movement_costs(state, actor)
+    rows: list[list[float]] = []
+    for dy in range(-LOCAL_MAP_RADIUS, LOCAL_MAP_RADIUS + 1):
+        for dx in range(-LOCAL_MAP_RADIUS, LOCAL_MAP_RADIUS + 1):
+            position = Position(actor.position.x + dx, actor.position.y + dy)
+            terrain_type = terrain_at_for_map_features(state, position)
+            movement_cost = 0.0
+            blocked = True
+            if grid_map is not None and grid_map.in_bounds(position):
+                cost = grid_map.movement_cost(position)
+                movement_cost = float(cost or 0)
+                blocked = cost is None
+            cover_cell = terrain_type in {
+                TerrainType.LOW_COVER,
+                TerrainType.HIGH_COVER,
+            }
+            visible = _has_line_of_sight(state, actor.position, position)
+            rows.append(
+                [
+                    *[float(terrain_type is candidate) for candidate in TERRAIN_FEATURE_TYPES],
+                    float(blocked),
+                    float(cover_cell),
+                    movement_cost,
+                    float(position in reachable_costs),
+                    float(visible),
+                ]
+            )
+    return rows
 
 
 def _encode_actor_map_features(actor: Character, state: CombatState) -> list[float]:
@@ -715,6 +815,13 @@ def _terrain_value(state: CombatState, position: Position) -> float:
     if grid_map is None or not grid_map.in_bounds(position):
         return float(_terrain_index(TerrainType.BLOCKED))
     return float(_terrain_index(grid_map.terrain_at(position)))
+
+
+def terrain_at_for_map_features(state: CombatState, position: Position) -> TerrainType:
+    grid_map = state.grid_map
+    if grid_map is None or not grid_map.in_bounds(position):
+        return TerrainType.BLOCKED
+    return grid_map.terrain_at(position)
 
 
 def _movement_cost_value(state: CombatState, position: Position) -> float:
