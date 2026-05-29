@@ -86,6 +86,15 @@ from agents.ppo_model import (
     PPOActorCritic,
 )
 from agents.random_agent import RandomAgent
+from agents.rule_based import (
+    AggressiveMeleeAgent,
+    CoverAwareRangedAgent,
+    RandomLegalAgent,
+    RangedKitingAgent,
+    RuleBasedAgent,
+    SimpleCasterAgent,
+    SimpleHealerAgent,
+)
 
 __all__ = [
     "ACTION_CATEGORY_COUNT",
@@ -101,6 +110,7 @@ __all__ = [
     "ACTOR_REAL_GAME_FEATURE_SIZE",
     "ACTOR_REAL_GAME_OFFSET",
     "ActionCategory",
+    "AggressiveMeleeAgent",
     "BaseAgent",
     "BASE_CHARACTER_FEATURE_SIZE",
     "CHARACTER_FEATURE_SIZE",
@@ -153,9 +163,15 @@ __all__ = [
     "PREPARED_SPELL_FEATURE_SIZE",
     "PPOActorCritic",
     "RandomAgent",
+    "RandomLegalAgent",
+    "RangedKitingAgent",
+    "RuleBasedAgent",
+    "SimpleCasterAgent",
+    "SimpleHealerAgent",
     "SPELL_SLOT_FEATURE_SIZE",
     "TERRAIN_AROUND_FEATURE_SIZE",
     "CombatGNNEncoder",
+    "CoverAwareRangedAgent",
     "actor_features_to_entity_node",
     "build_edge_features",
     "build_action_masks",

@@ -18,7 +18,18 @@ for path in (PROJECT_ROOT, SRC_DIR):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from agents import PPOActorCritic, build_action_masks, decode_action, encode_observation
+from agents import (
+    AggressiveMeleeAgent,
+    CoverAwareRangedAgent,
+    PPOActorCritic,
+    RandomLegalAgent,
+    RangedKitingAgent,
+    SimpleCasterAgent,
+    SimpleHealerAgent,
+    build_action_masks,
+    decode_action,
+    encode_observation,
+)
 from agents.action_space import explain_action_mask
 from combat import (
     ActionResult,
@@ -53,6 +64,14 @@ from scripts.run_demo import (
 
 DEFAULT_EPISODES = 5
 DEFAULT_MAX_STEPS = 200
+BASELINE_AGENTS = {
+    "aggressive_melee": AggressiveMeleeAgent,
+    "ranged_kiting": RangedKitingAgent,
+    "simple_healer": SimpleHealerAgent,
+    "simple_caster": SimpleCasterAgent,
+    "cover_aware_ranged": CoverAwareRangedAgent,
+    "random_legal": RandomLegalAgent,
+}
 
 
 @dataclass
@@ -92,8 +111,9 @@ def main() -> None:
     args = parse_args()
     seed_everything(args.seed)
     checkpoint_path = resolve_checkpoint_path(args.checkpoint)
-    model, model_source = load_or_create_model(
+    model, model_source = load_or_create_policy(
         checkpoint_path,
+        baseline_agent=args.baseline_agent,
         require_checkpoint=args.require_checkpoint,
     )
     scenarios = select_scenarios(
@@ -161,6 +181,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Sample policy actions instead of using deterministic argmax actions.",
     )
+    parser.add_argument(
+        "--baseline-agent",
+        choices=tuple(BASELINE_AGENTS),
+        help="Evaluate a rule-based baseline instead of a PPO checkpoint.",
+    )
     args = parser.parse_args(argv)
     if args.episodes <= 0:
         parser.error("--episodes must be greater than zero")
@@ -174,12 +199,16 @@ def seed_everything(seed: int) -> None:
     torch.manual_seed(seed)
 
 
-def load_or_create_model(
+def load_or_create_policy(
     checkpoint_path: Path,
     *,
+    baseline_agent: str | None = None,
     require_checkpoint: bool = False,
-) -> tuple[PPOActorCritic, str]:
-    """Load a PPO checkpoint or create a fresh model for pipeline evaluation."""
+) -> tuple[object, str]:
+    """Load a PPO checkpoint, create a fresh PPO model, or create a baseline."""
+
+    if baseline_agent is not None:
+        return BASELINE_AGENTS[baseline_agent](), baseline_agent
 
     if checkpoint_path.exists():
         return load_ppo_checkpoint(checkpoint_path), str(checkpoint_path)
@@ -217,7 +246,7 @@ def select_scenarios(
 
 
 def run_evaluation(
-    model: PPOActorCritic,
+    model: object,
     scenarios: Sequence[EvaluationScenario],
     *,
     episodes: int = DEFAULT_EPISODES,
@@ -245,7 +274,7 @@ def run_evaluation(
 
 
 def run_episode(
-    model: PPOActorCritic,
+    model: object,
     scenario: EvaluationScenario,
     *,
     max_steps: int = DEFAULT_MAX_STEPS,
@@ -403,17 +432,38 @@ def summarize_scenario(
 
 
 def _policy_action(
-    model: PPOActorCritic,
+    model: object,
     state: CombatState,
     actor_id: int,
     *,
     deterministic: bool,
 ) -> tuple[CombatAction, bool]:
-    observation = fit_observation_for_model(encode_observation(state, actor_id), model)
-    masks = fit_masks_for_model(build_action_masks(state, actor_id), model)
-    with torch.no_grad():
-        model_action = model.act(observation, masks, deterministic=deterministic)
+    masks = build_action_masks(state, actor_id)
+    if not isinstance(model, PPOActorCritic):
+        actor = state.character_at(actor_id)
+        model_action = model.act(
+            None,
+            masks,
+            state=state,
+            actor_id=actor_id,
+            actor=actor,
+            deterministic=deterministic,
+        )
+        return _decode_model_action(model_action, state, actor_id)
 
+    observation = fit_observation_for_model(encode_observation(state, actor_id), model)
+    fitted_masks = fit_masks_for_model(masks, model)
+    with torch.no_grad():
+        model_action = model.act(observation, fitted_masks, deterministic=deterministic)
+
+    return _decode_model_action(model_action, state, actor_id)
+
+
+def _decode_model_action(
+    model_action: dict[str, torch.Tensor],
+    state: CombatState,
+    actor_id: int,
+) -> tuple[CombatAction, bool]:
     try:
         return decode_action(
             int(model_action["action_category"].item()),

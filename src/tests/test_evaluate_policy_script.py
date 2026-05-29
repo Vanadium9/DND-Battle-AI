@@ -1,5 +1,6 @@
 import torch
 
+from agents import RandomLegalAgent
 from agents import PPOActorCritic
 from combat.evaluation_scenarios import get_scenario
 from scripts.evaluate_policy import (
@@ -47,6 +48,21 @@ def test_evaluate_policy_report_contains_requested_metrics() -> None:
     assert "deaths=" in report
     assert "action distribution=" in report
     assert "masked action statistics=" in report
+
+
+def test_evaluate_policy_accepts_rule_based_baseline() -> None:
+    scenario = get_scenario("Level 1 Fighter vs 1 Goblin")
+
+    results = run_evaluation(
+        RandomLegalAgent(seed=3),
+        (scenario,),
+        episodes=1,
+        max_steps=2,
+        seed=0,
+    )
+
+    assert len(results[0].episodes) == 1
+    assert results[0].episodes[0].steps > 0
 
 
 def test_fit_observation_for_older_checkpoint_shapes() -> None:

@@ -18,10 +18,12 @@ src/
   rules/       ruleset registry and supported content policy
   tests/       pytest suite
   training/    PPO rollout and training logic
+  ui/          PySide6 desktop GUI layer
 configs/
   ruleset_srd5e_minimal.yaml
 scripts/
   run_demo.py
+  run_gui.py
   train_ppo.py
 checkpoints/
 requirements.txt
@@ -202,6 +204,16 @@ python scripts/train_ppo.py --episodes 100 --seed 0 --checkpoint checkpoints/ppo
 
 ```bash
 python scripts/run_demo.py --checkpoint checkpoints/ppo_actor_critic.pt
+```
+
+## Запуск GUI
+
+Desktop GUI сделан как отдельный PySide6-слой поверх существующего combat
+engine. Он не запускает обучение модели: PPO/GNN обучение остаётся в
+консольных скриптах `scripts/train_*.py`.
+
+```bash
+python scripts/run_gui.py
 ```
 
 ## Roadmap

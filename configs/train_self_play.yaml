@@ -1,0 +1,9 @@
+enabled: true
+opponent_pool_dir: checkpoints/self_play_opponents
+add_current_every_updates: 10
+max_opponents: 16
+seed: 42
+freeze_enemy_policy: true
+train_player_side: true
+train_enemy_side: false
+add_initial_policy: true

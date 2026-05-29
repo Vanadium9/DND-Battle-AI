@@ -36,6 +36,7 @@ from training.multi_agent import (
     RandomPolicy,
     RuleBasedEnemyPolicy,
 )
+from training.self_play import SelfPlayConfig, SelfPlayManager
 
 
 LOGGER = logging.getLogger(__name__)
@@ -70,6 +71,9 @@ class RolloutBuffer:
             "option_index": [],
         }
     )
+    actor_ids: list[int] = field(default_factory=list)
+    team_ids: list[int] = field(default_factory=list)
+    episode_winners: list[Team | None] = field(default_factory=list)
     last_value: float = 0.0
 
     def append(
@@ -80,6 +84,8 @@ class RolloutBuffer:
         done: bool,
         masks: dict[str, torch.Tensor],
         critic_observation: Any | None = None,
+        actor_id: int | None = None,
+        team: Team | None = None,
     ) -> None:
         actor_observation = _detach_observation(observation)
         critic_observation = _detach_observation(
@@ -92,6 +98,8 @@ class RolloutBuffer:
         self.rewards.append(float(reward))
         self.dones.append(bool(done))
         self.values.append(action["value"].detach().cpu().reshape(()))
+        self.actor_ids.append(-1 if actor_id is None else int(actor_id))
+        self.team_ids.append(_team_id(team))
 
         for key, value in action.items():
             if key in {"log_prob", "entropy", "value"}:
@@ -116,6 +124,16 @@ class RolloutBuffer:
     def to_tensors(self, device: torch.device) -> dict[str, Any]:
         if not self.rewards:
             raise ValueError("rollout is empty")
+        actor_ids = (
+            self.actor_ids
+            if len(self.actor_ids) == len(self.rewards)
+            else [-1] * len(self.rewards)
+        )
+        team_ids = (
+            self.team_ids
+            if len(self.team_ids) == len(self.rewards)
+            else [-1] * len(self.rewards)
+        )
 
         return {
             "observations": _stack_observations(self.observations, device),
@@ -139,6 +157,16 @@ class RolloutBuffer:
                 key: torch.stack(values).to(device=device)
                 for key, values in self.masks.items()
             },
+            "actor_ids": torch.tensor(
+                actor_ids,
+                dtype=torch.long,
+                device=device,
+            ),
+            "team_ids": torch.tensor(
+                team_ids,
+                dtype=torch.long,
+                device=device,
+            ),
             "last_value": torch.tensor(
                 self.last_value,
                 dtype=torch.float32,
@@ -207,6 +235,9 @@ class PPOTrainer:
         policy_router: MultiAgentPolicyRouter | None = None,
         rule_based_enemy_policy: bool | Any = False,
         random_policy: bool | Any = False,
+        trainable_teams: set[Team] | list[Team] | tuple[Team, ...] | None = None,
+        self_play_config: SelfPlayConfig | None = None,
+        self_play_manager: SelfPlayManager | None = None,
     ) -> None:
         self.environment = environment
         self.config = config or PPOConfig()
@@ -227,6 +258,12 @@ class PPOTrainer:
             random_policy=random_policy,
         )
         self._move_policy_modules_to_device()
+        self.trainable_teams = (
+            None if trainable_teams is None else {Team(team) for team in trainable_teams}
+        )
+        self.self_play_manager = self_play_manager or (
+            SelfPlayManager(self_play_config) if self_play_config is not None else None
+        )
         self.optimizer = optimizer or torch.optim.Adam(
             self.model.parameters(),
             lr=self.config.learning_rate,
@@ -277,6 +314,7 @@ class PPOTrainer:
 
             state = self.environment.combat_state
             actor_id = self._active_actor_id()
+            actor = state.character_at(actor_id)
             policy = self._policy_for_actor(state, actor_id)
             actor_observation = self._actor_observation(state, actor_id, policy)
             critic_observation = self._critic_observation(state, actor_id, policy)
@@ -303,6 +341,8 @@ class PPOTrainer:
                 done,
                 masks,
                 critic_observation=critic_observation,
+                actor_id=actor_id,
+                team=actor.team if actor is not None else None,
             )
 
             if done:
@@ -315,6 +355,8 @@ class PPOTrainer:
             winner=self.environment.get_winner(),
             action_counts=action_counts,
         )
+        if stats.winner is not None:
+            rollout.episode_winners.append(stats.winner)
         self.record_curriculum_result(stats.winner)
         return rollout, stats
 
@@ -364,9 +406,13 @@ class PPOTrainer:
                 done,
                 masks,
                 critic_observation=critic_observation,
+                actor_id=actor_id,
+                team=actor.team,
             )
             if done:
-                self.record_curriculum_result(self.environment.get_winner())
+                winner = self.environment.get_winner()
+                rollout.episode_winners.append(winner)
+                self.record_curriculum_result(winner)
                 self._reset_environment_for_episode()
 
         rollout.last_value = self._bootstrap_value()
@@ -417,7 +463,8 @@ class PPOTrainer:
         returns, advantages = self.compute_returns_and_advantages(rollout)
         advantages = _normalize_advantages(advantages)
 
-        batch_size = len(rollout)
+        train_indices = self._trainable_indices(data["team_ids"])
+        batch_size = int(train_indices.numel())
         minibatch_size = min(self.config.minibatch_size, batch_size)
         metrics = {
             "policy_loss": 0.0,
@@ -425,10 +472,12 @@ class PPOTrainer:
             "entropy": 0.0,
             "loss": 0.0,
         }
+        if batch_size == 0:
+            return metrics
         updates = 0
 
         for _ in range(self.config.update_epochs):
-            indices = torch.randperm(batch_size, device=self.device)
+            indices = train_indices[torch.randperm(batch_size, device=self.device)]
             for start in range(0, batch_size, minibatch_size):
                 batch_indices = indices[start : start + minibatch_size]
                 batch_actions = {
@@ -494,8 +543,12 @@ class PPOTrainer:
     ) -> dict[str, float | str]:
         """Collect rollout, update model, and optionally save a checkpoint."""
 
+        if self.self_play_manager is not None:
+            self.self_play_manager.before_rollout(self)
         rollout = self.collect_rollout()
         metrics: dict[str, float | str] = self.update(rollout)
+        if self.self_play_manager is not None:
+            metrics.update(self.self_play_manager.after_update(self, rollout, metrics))
         if save_checkpoint:
             metrics["checkpoint_path"] = str(self.save_checkpoint(checkpoint_name))
         return metrics
@@ -821,6 +874,20 @@ class PPOTrainer:
             ),
         )
 
+    def _trainable_indices(self, team_ids: torch.Tensor) -> torch.Tensor:
+        if self.trainable_teams is None:
+            return torch.arange(team_ids.shape[0], dtype=torch.long, device=self.device)
+        allowed_team_ids = {
+            _team_id(team)
+            for team in self.trainable_teams
+        }
+        if not allowed_team_ids:
+            return torch.empty(0, dtype=torch.long, device=self.device)
+        mask = torch.zeros_like(team_ids, dtype=torch.bool)
+        for team_id in allowed_team_ids:
+            mask = mask | (team_ids == int(team_id))
+        return torch.nonzero(mask, as_tuple=False).reshape(-1)
+
     def _padded_masks(
         self,
         masks: dict[str, torch.Tensor],
@@ -909,6 +976,14 @@ def _policy_action_space(policy: Any, fallback: Any) -> SimpleNamespace:
         move_count=int(getattr(source, "move_count")),
         option_count=int(getattr(source, "option_count")),
     )
+
+
+def _team_id(team: Team | None) -> int:
+    if team is Team.PLAYERS:
+        return 0
+    if team is Team.ENEMIES:
+        return 1
+    return -1
 
 
 def _detach_observation(observation: Any) -> Any:

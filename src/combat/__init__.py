@@ -228,6 +228,7 @@ from combat.rewards import (
     opposing_team,
     snapshot_combat_state,
 )
+from combat.replay import BattleReplay, REPLAY_FORMAT, REPLAY_VERSION
 from combat.resources import (
     has_spell_slot,
     max_available_spell_slot_level,
@@ -302,6 +303,7 @@ __all__ = [
     "BASIC_MONSTER_PRESETS",
     "Bandit",
     "Bomb",
+    "BattleReplay",
     "COMMON_ACTION_ATTACK",
     "COMMON_ACTION_CAST_SPELL",
     "COMMON_ACTION_DASH",
@@ -381,6 +383,8 @@ __all__ = [
     "PotionOfHealing",
     "ReadyAction",
     "RaceTraits",
+    "REPLAY_FORMAT",
+    "REPLAY_VERSION",
     "RewardConfig",
     "Resource",
     "SearchAction",

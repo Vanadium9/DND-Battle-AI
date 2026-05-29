@@ -1928,3 +1928,168 @@ Observation/model должны получать role_id.
 - player_policy управляет только игроками
 - enemy_policy управляет только врагами
 - одна общая policy может управлять всеми
+
+## 52. Запрос: Добавь self-play обучение
+
+Файлы:
+- src/training/self_play.py
+- src/training/ppo_trainer.py
+- configs/train_self_play.yaml
+
+Требования:
+- текущая policy может играть против копий старых версий policy
+- opponent pool хранит checkpoints
+- каждые N updates текущая policy добавляется в opponent pool
+- opponent выбирается случайно
+- можно заморозить enemy_policy
+- можно обучать только player side или обе стороны
+
+Логировать:
+- текущий opponent checkpoint
+- win rate против каждого opponent
+- среднюю награду
+- action distribution
+- resource usage
+
+Добавь тесты:
+- opponent pool добавляет checkpoint
+- opponent случайно выбирается
+- frozen enemy policy не обновляется
+
+## 53. Запрос: Добавь rule-based baseline agents для сравнения с PPO
+
+Файлы:
+- src/agents/rule_based.py
+
+Реализуй:
+- AggressiveMeleeAgent
+- RangedKitingAgent
+- SimpleHealerAgent
+- SimpleCasterAgent
+- CoverAwareRangedAgent
+- RandomLegalAgent
+
+Требования:
+- агенты должны использовать те же action masks
+- не должны выбирать нелегальные действия
+- RangedKitingAgent должен учитывать distance и terrain
+- CoverAwareRangedAgent должен пытаться занимать cover
+- SimpleHealerAgent должен использовать healing spells/items при низком HP союзника
+- можно использовать их в evaluate_policy.py
+- можно использовать их как opponents в self-play
+
+Добавь тесты:
+- каждый baseline agent выбирает legal action
+- healer лечит раненого союзника при наличии ресурса
+- ranged agent не идёт в melee без необходимости
+
+## 54. Запрос: Добавь формат записи боя BattleReplay
+
+Файлы:
+- src/combat/replay.py
+- scripts/run_demo.py
+
+BattleReplay должен сохранять каждый шаг боя в JSON:
+- round
+- turn_index
+- initiative_order
+- actor
+- actor_team
+- positions
+- hp values
+- conditions
+- resources
+- action
+- action_category
+- targets
+- dice rolls
+- damage
+- healing
+- spell slots spent
+- items spent
+- deaths
+- reward breakdown
+- map terrain snapshot или map metadata
+- cover/line_of_sight info для действия, если применимо
+- winner
+- XP gained
+
+Обнови run_demo.py:
+- добавить аргумент --save-replay
+- сохранять replay в папку replays/
+
+Добавь тесты:
+- replay сохраняется
+- replay содержит все обязательные поля
+
+## 55. Запрос: Добавь удобный консольный replay viewer
+
+Скрипт:
+- scripts/view_replay_console.py
+
+Требования:
+- загружать replay JSON
+- пошагово выводить состояние боя
+- показывать карту ASCII
+- отображать:
+  - blocked cells
+  - difficult terrain
+  - cover cells
+  - позиции существ
+- показывать HP и ресурсы существ
+- показывать последнее действие
+- показывать initiative order
+- поддерживать команды:
+  - next
+  - prev
+  - quit
+  - autoplay
+
+Добавь тест на загрузку replay.
+
+## 56. Запрос: Создай основу полноценного desktop GUI для проекта
+
+Технология:
+- использовать PySide6
+- не использовать GUI для обучения модели
+- обучение PPO/GNN остаётся через существующие scripts/train_*.py
+
+Файлы:
+- src/ui/
+  - app.py
+  - main_window.py
+  - navigation.py
+  - theme.py
+  - widgets/
+  - screens/
+- scripts/run_gui.py
+
+Требования:
+- создать главное окно приложения
+- добавить боковое или верхнее меню навигации
+- пункты меню:
+  - Главная
+  - Персонажи
+  - Создать персонажа
+  - Случайный бой
+  - Кастомный бой
+  - Реплеи
+  - Настройки
+- использовать QStackedWidget или аналогичный механизм переключения экранов
+- добавить базовую тему оформления:
+  - спокойные цвета
+  - читаемые шрифты
+  - единый стиль кнопок
+- добавить стартовый экран с кратким описанием проекта:
+  - D&D Battle AI
+  - использование обученной нейросети для пошаговых боёв
+  - обучение запускается отдельно через скрипты
+
+Важно:
+- GUI не должен ломать существующие CLI-скрипты
+- вся логика боя должна использовать уже существующий combat engine
+- не дублировать боевую логику внутри UI
+
+Добавь README-раздел:
+- как запустить GUI:
+  - python scripts/run_gui.py

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 from pathlib import Path
 import sys
 from collections.abc import Sequence
@@ -21,6 +22,7 @@ from combat import (
     Character,
     CombatAction,
     CombatEnvironment,
+    BattleReplay,
     DashAction,
     DisengageAction,
     DodgeAction,
@@ -41,6 +43,7 @@ from combat import (
 
 DEFAULT_CHECKPOINT = PROJECT_ROOT / "checkpoints" / "ppo_actor_critic.pt"
 DEFAULT_MAX_STEPS = 200
+DEFAULT_REPLAY_DIR = PROJECT_ROOT / "replays"
 
 
 def main() -> None:
@@ -50,7 +53,16 @@ def main() -> None:
     environment = create_demo_environment()
 
     print(f"Loaded checkpoint: {checkpoint_path}")
-    run_battle_demo(model, environment, max_steps=args.max_steps)
+    run_battle_demo(
+        model,
+        environment,
+        max_steps=args.max_steps,
+        save_replay=args.save_replay,
+        replay_metadata={
+            "checkpoint": str(checkpoint_path),
+            "max_steps": args.max_steps,
+        },
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -66,6 +78,11 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=DEFAULT_MAX_STEPS,
         help="Maximum number of combat steps before stopping the demo.",
+    )
+    parser.add_argument(
+        "--save-replay",
+        action="store_true",
+        help="Save a structured BattleReplay JSON file into replays/.",
     )
     args = parser.parse_args()
     if args.max_steps <= 0:
@@ -125,7 +142,12 @@ def run_battle_demo(
     model: PPOActorCritic,
     environment: CombatEnvironment,
     max_steps: int = DEFAULT_MAX_STEPS,
-) -> None:
+    *,
+    save_replay: bool = False,
+    replay_dir: Path = DEFAULT_REPLAY_DIR,
+    replay_metadata: dict[str, object] | None = None,
+) -> Path | None:
+    replay = BattleReplay(metadata=replay_metadata or {}) if save_replay else None
     for _ in range(max_steps):
         if environment.is_done():
             break
@@ -155,7 +177,10 @@ def run_battle_demo(
         print(f"Actor: {actor.name}")
         print(f"HP: {format_hp(state.characters)}")
         print(f"Action: {describe_action(action, environment)}")
+        before_step = replay.snapshot_state(state) if replay is not None else None
         result = environment.step(action)
+        if replay is not None and before_step is not None:
+            replay.record_step(before_step, environment.combat_state, action, result)
         print(f"Result: {result.description}")
         print("")
 
@@ -165,6 +190,20 @@ def run_battle_demo(
     winner = environment.get_winner()
     winner_text = winner.value if winner is not None else "none"
     print(f"Winner: {winner_text}")
+    if replay is None:
+        return None
+
+    replay_path = save_demo_replay(replay, replay_dir)
+    print(f"Replay saved: {replay_path}")
+    return replay_path
+
+
+def save_demo_replay(
+    replay: BattleReplay,
+    replay_dir: Path = DEFAULT_REPLAY_DIR,
+) -> Path:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return replay.save(replay_dir / f"battle_replay_{timestamp}.json")
 
 
 def format_hp(characters: Sequence[Character]) -> str:
