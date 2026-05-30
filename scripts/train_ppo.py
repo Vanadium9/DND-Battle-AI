@@ -65,7 +65,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--episodes",
         type=int,
-        default=100,
+        default=1000,
         help="Number of training episodes.",
     )
     parser.add_argument(

@@ -95,5 +95,48 @@ def apply_theme(app: QApplication) -> None:
             background: #c7d0d9;
             color: #6b7785;
         }
+
+        QPushButton#dangerButton {
+            background: #b85c5c;
+        }
+
+        QPushButton#dangerButton:hover {
+            background: #9f4c4c;
+        }
+
+        QFrame#characterCard {
+            background: #f9fbfc;
+            border: 1px solid #d8e0e8;
+            border-radius: 8px;
+        }
+
+        QLabel#characterCardTitle {
+            color: #17202a;
+            font-size: 14pt;
+            font-weight: 700;
+        }
+
+        QLabel#characterCardMetaLabel {
+            color: #52616f;
+            font-weight: 600;
+        }
+
+        QLabel#characterCardMetaValue {
+            color: #1f2933;
+        }
+
+        QLabel#emptyStateLabel {
+            color: #6b7785;
+            padding: 36px;
+            font-size: 12pt;
+        }
+
+        QPlainTextEdit {
+            background: #ffffff;
+            border: 1px solid #d8e0e8;
+            border-radius: 6px;
+            padding: 10px;
+            font-family: Consolas, "Courier New", monospace;
+        }
         """
     )

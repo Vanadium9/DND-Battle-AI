@@ -5,8 +5,18 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QMainWindow, QStackedWidget, QWidget
 
+from character import CharacterRepository
 from ui.navigation import NAVIGATION_ITEMS, NavigationPanel
-from ui.screens import HomeScreen, PlaceholderScreen
+from ui.screens import (
+    BattleScreen,
+    CharacterBuilderScreen,
+    CharacterListScreen,
+    HomeScreen,
+    PlaceholderScreen,
+    RandomBattleScreen,
+    SettingsScreen,
+)
+from ui.services import BattleSetupResult, BattleSetupService, ModelService
 
 
 SCREEN_DEFINITIONS: dict[str, tuple[str, str]] = {
@@ -40,16 +50,26 @@ SCREEN_DEFINITIONS: dict[str, tuple[str, str]] = {
 class MainWindow(QMainWindow):
     """Top-level application window with navigation and screen stack."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        character_repository: CharacterRepository | None = None,
+        model_service: ModelService | None = None,
+    ) -> None:
         super().__init__()
         self.setWindowTitle("D&D Battle AI")
         self.resize(1180, 760)
         self.setMinimumSize(900, 560)
 
+        self._character_repository = character_repository or CharacterRepository()
+        self._model_service = model_service or ModelService()
+        self._battle_setup_service = BattleSetupService(self._character_repository)
         self._navigation = NavigationPanel(NAVIGATION_ITEMS)
         self._navigation.setFixedWidth(230)
         self._stack = QStackedWidget()
         self._screen_indexes: dict[str, int] = {}
+        self._character_builder_screen: CharacterBuilderScreen | None = None
+        self._battle_screen: BattleScreen | None = None
+        self._battle_screen_index: int | None = None
 
         self._build_layout()
         self._build_screens()
@@ -63,6 +83,10 @@ class MainWindow(QMainWindow):
         if index is None:
             return
         self._stack.setCurrentIndex(index)
+        current_widget = self._stack.widget(index)
+        refresh = getattr(current_widget, "refresh", None)
+        if callable(refresh):
+            refresh()
 
     def _build_layout(self) -> None:
         central = QWidget()
@@ -75,8 +99,35 @@ class MainWindow(QMainWindow):
 
     def _build_screens(self) -> None:
         self._add_screen("home", HomeScreen())
+        characters_screen = CharacterListScreen(self._character_repository)
+        characters_screen.create_requested.connect(self._open_character_create)
+        characters_screen.edit_requested.connect(self._open_character_editor)
+        self._add_screen("characters", characters_screen)
+        self._character_builder_screen = CharacterBuilderScreen(
+            self._character_repository
+        )
+        self._character_builder_screen.saved.connect(self._character_saved)
+        self._character_builder_screen.cancelled.connect(
+            lambda: self._navigation.select("characters")
+        )
+        self._add_screen("character_create", self._character_builder_screen)
+        random_battle_screen = RandomBattleScreen(
+            self._battle_setup_service,
+            self._model_service,
+        )
+        random_battle_screen.battle_started.connect(self._open_battle_screen)
+        self._add_screen("random_battle", random_battle_screen)
+        self._battle_screen = BattleScreen(self._model_service)
+        self._battle_screen_index = self._stack.addWidget(self._battle_screen)
+        self._add_screen("settings", SettingsScreen(self._model_service))
         for item in NAVIGATION_ITEMS:
-            if item.key == "home":
+            if item.key in {
+                "home",
+                "characters",
+                "character_create",
+                "random_battle",
+                "settings",
+            }:
                 continue
             title, description = SCREEN_DEFINITIONS[item.key]
             self._add_screen(item.key, PlaceholderScreen(title, description))
@@ -85,3 +136,22 @@ class MainWindow(QMainWindow):
 
     def _add_screen(self, key: str, widget: QWidget) -> None:
         self._screen_indexes[key] = self._stack.addWidget(widget)
+
+    def _open_character_create(self) -> None:
+        if self._character_builder_screen is not None:
+            self._character_builder_screen.new_character()
+        self._navigation.select("character_create")
+
+    def _open_character_editor(self, character_id: str) -> None:
+        if self._character_builder_screen is not None:
+            self._character_builder_screen.load_character(character_id)
+        self._navigation.select("character_create")
+
+    def _character_saved(self) -> None:
+        self._navigation.select("characters")
+
+    def _open_battle_screen(self, setup_result: BattleSetupResult) -> None:
+        if self._battle_screen is None or self._battle_screen_index is None:
+            return
+        self._battle_screen.set_battle(setup_result)
+        self._stack.setCurrentIndex(self._battle_screen_index)

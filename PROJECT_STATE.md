@@ -2093,3 +2093,318 @@ BattleReplay должен сохранять каждый шаг боя в JSON:
 Добавь README-раздел:
 - как запустить GUI:
   - python scripts/run_gui.py
+
+## 57. Запрос: Добавь систему хранения созданных персонажей для GUI
+
+Файлы:
+- src/character/schema.py
+- src/character/io.py
+- src/character/validation.py
+- src/character/repository.py
+- data/characters/
+
+InternalCharacter должен включать:
+- id
+- name
+- class_name
+- subclass_name
+- level
+- experience
+- race_name
+- role
+- stats
+- hp
+- ac
+- speed
+- proficiency_bonus
+- weapons
+- armor
+- class_features
+- subclass_features
+- race_traits
+- feats
+- spells
+- prepared_spells
+- spell_slots
+- resources
+- inventory
+- resistances
+- immunities
+- vulnerabilities
+
+Реализуй:
+- CharacterRepository
+  - list_characters()
+  - get_character(id)
+  - save_character(character)
+  - delete_character(id)
+  - duplicate_character(id)
+  - validate_character(character)
+- хранение персонажей в JSON-файлах в data/characters/
+- автоматическое создание папки data/characters/, если её нет
+- генерацию id для персонажа
+
+Важно:
+- только внутренний формат персонажей
+- никаких LongStoryShort/import URL функций
+- validation должна проверять соответствие ruleset registry
+- GUI должен использовать CharacterRepository, а не читать файлы напрямую
+
+Добавь тесты:
+- персонаж сохраняется
+- персонаж загружается
+- список персонажей возвращается корректно
+- невалидный персонаж не сохраняется без ошибки validation
+
+## 58. Запрос: Реализуй экран просмотра созданных персонажей
+
+Файлы:
+- src/ui/screens/character_list_screen.py
+- src/ui/widgets/character_card.py
+
+Экран "Персонажи" должен показывать:
+- список всех созданных персонажей из CharacterRepository
+- карточку персонажа:
+  - имя
+  - раса
+  - класс
+  - подкласс
+  - уровень
+  - HP
+  - AC
+  - основное оружие
+  - роль
+- кнопки:
+  - Просмотр
+  - Редактировать
+  - Дублировать
+  - Удалить
+
+При открытии персонажа показывать подробную информацию:
+- характеристики
+- владения
+- оружие
+- броня
+- классовые способности
+- расовые особенности
+- черты
+- заклинания
+- ячейки заклинаний
+- инвентарь
+- сопротивления/иммунитеты/уязвимости
+
+Требования:
+- если персонажей нет, показать сообщение "Персонажи ещё не созданы"
+- кнопка "Создать персонажа" должна переводить на экран создания
+- после удаления или создания список должен обновляться
+- удаление должно требовать подтверждения
+
+Важно:
+- экран только отображает и управляет персонажами
+- боевую логику не реализовывать в этом экране
+
+## 59. Запрос: Создай полноценный GUI-конструктор персонажей
+
+Файлы:
+- src/ui/screens/character_builder_screen.py
+- src/ui/widgets/stat_editor.py
+- src/ui/widgets/spell_selector.py
+- src/ui/widgets/inventory_editor.py
+
+Конструктор должен позволять:
+- создать нового персонажа
+- редактировать существующего персонажа
+- выбрать race из поддержанных ruleset:
+  - Human
+  - Dwarf
+  - Elf
+  - Halfling
+- выбрать class:
+  - Fighter
+  - Cleric
+  - Wizard
+- выбрать level 1-5
+- выбрать subclass, если уровень позволяет:
+  - Fighter: Champion
+  - Cleric: Life Domain
+  - Wizard: Evocation
+- ввести или сгенерировать stats
+- применить racial bonuses
+- выбрать ASI/feat на 4 уровне
+- выбрать fighting style для Fighter
+- выбрать prepared spells для Cleric/Wizard
+- выбрать weapons
+- выбрать armor
+- добавить inventory items из supported items
+- рассчитать:
+  - proficiency_bonus
+  - hp
+  - ac
+  - spell_save_dc
+  - spell_attack_bonus
+  - spell slots
+  - class resources
+
+UI требования:
+- использовать пошаговый мастер или вкладки:
+  1. Основное
+  2. Характеристики
+  3. Класс
+  4. Заклинания
+  5. Экипировка
+  6. Инвентарь
+  7. Проверка
+- на последнем шаге показывать validation errors/warnings
+- кнопка "Сохранить" доступна только если персонаж валиден
+- builder должен показывать только поддержанные элементы
+- нельзя выбрать Fireball для Wizard level 1
+- нельзя выбрать unsupported class/race/subclass/spell/item
+
+Важно:
+- никакого импорта из внешних сервисов
+- все ограничения брать из ruleset registry
+- после сохранения пользователь возвращается на экран списка персонажей
+
+Добавь тесты для validation-части, GUI-тесты делать необязательно.
+
+## 60. Запрос: Добавь сервис инференса обученной нейросети для GUI
+
+Файлы:
+- src/inference/
+  - policy_loader.py
+  - battle_ai.py
+  - action_selector.py
+- src/ui/services/model_service.py
+
+Требования:
+- GUI должен уметь загрузить обученный checkpoint
+- поддержать model_type:
+  - mlp
+  - gnn, если реализован
+- если checkpoint не выбран, использовать RandomLegalAgent или RuleBasedAgent как fallback
+- BattleAIService должен иметь методы:
+  - load_checkpoint(path, model_type)
+  - is_model_loaded()
+  - select_action(combat_state, actor_id)
+  - get_policy_name()
+- select_action должен использовать:
+  - observation encoder
+  - action masks
+  - PPO/GNN model
+  - decode_action
+
+Важно:
+- обучение не запускать из GUI
+- GUI только использует уже обученную модель
+- если модель не загрузилась, показать понятную ошибку
+- если модель не поддерживает текущий action space, показать ошибку совместимости
+
+Добавь настройки:
+- путь к checkpoint
+- model_type
+- fallback_agent
+
+Добавь тесты:
+- fallback agent выбирает legal action
+- несуществующий checkpoint даёт понятную ошибку
+- загруженная модель используется для выбора действия, если checkpoint валиден
+
+## 61. Запрос: Реализуй экран запуска случайного тестового боя
+
+Файлы:
+- src/ui/screens/random_battle_screen.py
+- src/ui/services/battle_setup_service.py
+
+Экран "Случайный бой" должен позволять:
+- выбрать party из созданных персонажей
+- или использовать готовые preset-персонажи
+- выбрать уровень сложности:
+  - Лёгкий
+  - Средний
+  - Сложный
+- выбрать карту:
+  - open_field
+  - cover_arena
+  - difficult_terrain_pass
+  - obstacle_corridor
+  - random
+- выбрать врагов:
+  - автоматически по сложности
+  - или preset enemy group
+- выбрать управляющего:
+  - AI управляет игроками
+  - AI управляет врагами
+  - AI управляет всеми
+  - игрок вручную управляет игроками, AI управляет врагами
+
+При нажатии "Начать бой":
+- создать CombatEnvironment
+- загрузить выбранную карту
+- расставить персонажей и врагов в spawn zones
+- открыть BattleScreen
+
+Требования:
+- если персонажи не выбраны, показать ошибку
+- если модель не загружена, предупредить, что будет использован fallback agent
+- случайная генерация должна поддерживать seed
+- отображать краткое описание боя перед запуском:
+  - party
+  - enemies
+  - map
+  - difficulty
+
+## 62. Запрос: Реализуй основной экран боя с отрисованной клеточной картой
+
+Файлы:
+- src/ui/screens/battle_screen.py
+- src/ui/widgets/battle_map_widget.py
+- src/ui/widgets/initiative_panel.py
+- src/ui/widgets/combat_log_widget.py
+- src/ui/widgets/creature_status_panel.py
+
+BattleScreen должен показывать:
+- клеточную карту
+- токены персонажей и врагов
+- HP над токенами или рядом с ними
+- текущего активного участника
+- порядок инициативы
+- панель статуса выбранного существа
+- боевой лог
+- кнопки управления:
+  - Следующий шаг
+  - Автобой
+  - Пауза
+  - Завершить бой
+  - Сохранить реплей
+
+Цвета карты:
+- normal terrain — салатовый
+- blocked — коричневый
+- difficult terrain — жёлто-зелёный
+- low cover — светло-серый
+- high cover — тёмно-серый
+- доступные клетки движения — полупрозрачная подсветка
+- возможные цели — красная подсветка
+- текущий активный токен — обводка
+
+Токены:
+- игроки — синий/зелёный круг
+- враги — красный/оранжевый круг
+- мёртвые существа — затемнённый токен или крест
+- если есть portrait/icon, использовать его
+- если нет, показывать инициалы
+
+Лог боя должен отображать:
+- начало раунда
+- активное существо
+- выбранное действие
+- броски кубов
+- урон/лечение
+- траты ресурсов
+- смерти
+- победителя
+
+Важно:
+- экран боя использует CombatEnvironment.step()
+- не дублировать правила боя в UI
+- действия AI выбираются через BattleAIService

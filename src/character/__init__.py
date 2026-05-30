@@ -7,6 +7,13 @@ from character.schema import (
     CharacterProgressionSchema,
     CharacterRaceSchema,
     CharacterSchema,
+    InternalCharacter,
+)
+from character.repository import CharacterRepository, DEFAULT_CHARACTER_DATA_DIR
+from character.validation import (
+    CharacterValidationError,
+    ValidationIssue,
+    validate_character,
 )
 
 __all__ = [
@@ -16,4 +23,10 @@ __all__ = [
     "CharacterProgressionSchema",
     "CharacterRaceSchema",
     "CharacterSchema",
+    "CharacterRepository",
+    "CharacterValidationError",
+    "DEFAULT_CHARACTER_DATA_DIR",
+    "InternalCharacter",
+    "ValidationIssue",
+    "validate_character",
 ]

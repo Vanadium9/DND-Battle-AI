@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from rules.progression import get_level_for_xp, get_proficiency_bonus
@@ -18,6 +18,16 @@ from combat.items import (
     normalize_action_cost,
     normalize_target_type,
 )
+
+
+DEFAULT_CHARACTER_STATS: dict[str, int] = {
+    "str": 10,
+    "dex": 10,
+    "con": 10,
+    "int": 10,
+    "wis": 10,
+    "cha": 10,
+}
 
 
 @dataclass(frozen=True)
@@ -252,3 +262,175 @@ def _coerce_feat_definition(feat: object) -> FeatDefinition | None:
     if isinstance(name, str):
         return get_feat_definition(name)
     return None
+
+
+@dataclass(frozen=True)
+class InternalCharacter:
+    """Internal GUI-facing character format persisted by CharacterRepository."""
+
+    id: str = ""
+    name: str = ""
+    class_name: str = ""
+    subclass_name: str | None = None
+    level: int = 1
+    experience: int = 0
+    race_name: str = ""
+    role: str = "combatant"
+    stats: dict[str, int] = field(default_factory=lambda: dict(DEFAULT_CHARACTER_STATS))
+    hp: int = 1
+    ac: int = 10
+    speed: int = 30
+    proficiency_bonus: int = 2
+    weapons: tuple[dict[str, Any], ...] = ()
+    armor: dict[str, Any] = field(default_factory=dict)
+    class_features: tuple[str, ...] = ()
+    subclass_features: tuple[str, ...] = ()
+    race_traits: dict[str, Any] = field(default_factory=dict)
+    feats: tuple[str, ...] = ()
+    spells: tuple[dict[str, Any] | str, ...] = ()
+    prepared_spells: tuple[str, ...] = ()
+    spell_slots: dict[str, int] = field(default_factory=dict)
+    spell_save_dc: int = 0
+    spell_attack_bonus: int = 0
+    resources: dict[str, int] = field(default_factory=dict)
+    inventory: tuple[dict[str, Any], ...] = ()
+    resistances: tuple[str, ...] = ()
+    immunities: tuple[str, ...] = ()
+    vulnerabilities: tuple[str, ...] = ()
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "InternalCharacter":
+        """Build an InternalCharacter from JSON-compatible mapping data."""
+
+        stats = dict(DEFAULT_CHARACTER_STATS)
+        stats.update(
+            {
+                str(key): int(value)
+                for key, value in _mapping(data.get("stats")).items()
+                if str(key) in DEFAULT_CHARACTER_STATS
+            }
+        )
+        return cls(
+            id=str(data.get("id", "")),
+            name=str(data.get("name", "")),
+            class_name=str(data.get("class_name", "")),
+            subclass_name=_optional_string(data.get("subclass_name")),
+            level=int(data.get("level", 1)),
+            experience=int(data.get("experience", 0)),
+            race_name=str(data.get("race_name", "")),
+            role=str(data.get("role", "combatant")),
+            stats=stats,
+            hp=int(data.get("hp", 1)),
+            ac=int(data.get("ac", 10)),
+            speed=int(data.get("speed", 30)),
+            proficiency_bonus=int(data.get("proficiency_bonus", 2)),
+            weapons=_tuple_of_mappings(data.get("weapons")),
+            armor=dict(_mapping(data.get("armor"))),
+            class_features=_tuple_of_strings(data.get("class_features")),
+            subclass_features=_tuple_of_strings(data.get("subclass_features")),
+            race_traits=dict(_mapping(data.get("race_traits"))),
+            feats=_tuple_of_strings(data.get("feats")),
+            spells=_tuple_of_spell_values(data.get("spells")),
+            prepared_spells=_tuple_of_strings(data.get("prepared_spells")),
+            spell_slots={
+                str(level): int(count)
+                for level, count in _mapping(data.get("spell_slots")).items()
+            },
+            spell_save_dc=int(data.get("spell_save_dc", 0)),
+            spell_attack_bonus=int(data.get("spell_attack_bonus", 0)),
+            resources={
+                str(name): int(count)
+                for name, count in _mapping(data.get("resources")).items()
+            },
+            inventory=_tuple_of_mappings(data.get("inventory")),
+            resistances=_tuple_of_strings(data.get("resistances")),
+            immunities=_tuple_of_strings(data.get("immunities")),
+            vulnerabilities=_tuple_of_strings(data.get("vulnerabilities")),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a stable JSON-compatible representation."""
+
+        return {
+            "id": self.id,
+            "name": self.name,
+            "class_name": self.class_name,
+            "subclass_name": self.subclass_name,
+            "level": self.level,
+            "experience": self.experience,
+            "race_name": self.race_name,
+            "role": self.role,
+            "stats": dict(self.stats),
+            "hp": self.hp,
+            "ac": self.ac,
+            "speed": self.speed,
+            "proficiency_bonus": self.proficiency_bonus,
+            "weapons": [dict(weapon) for weapon in self.weapons],
+            "armor": dict(self.armor),
+            "class_features": list(self.class_features),
+            "subclass_features": list(self.subclass_features),
+            "race_traits": dict(self.race_traits),
+            "feats": list(self.feats),
+            "spells": [
+                dict(spell) if isinstance(spell, Mapping) else str(spell)
+                for spell in self.spells
+            ],
+            "prepared_spells": list(self.prepared_spells),
+            "spell_slots": dict(self.spell_slots),
+            "spell_save_dc": self.spell_save_dc,
+            "spell_attack_bonus": self.spell_attack_bonus,
+            "resources": dict(self.resources),
+            "inventory": [dict(item) for item in self.inventory],
+            "resistances": list(self.resistances),
+            "immunities": list(self.immunities),
+            "vulnerabilities": list(self.vulnerabilities),
+        }
+
+    def with_id(self, character_id: str) -> "InternalCharacter":
+        """Return a copy with a repository-assigned id."""
+
+        data = self.to_dict()
+        data["id"] = character_id
+        return InternalCharacter.from_mapping(data)
+
+
+def _optional_string(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value)
+    return text if text else None
+
+
+def _mapping(value: object) -> Mapping[str, Any]:
+    if isinstance(value, Mapping):
+        return value
+    return {}
+
+
+def _tuple_of_mappings(value: object) -> tuple[dict[str, Any], ...]:
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(dict(item) for item in value if isinstance(item, Mapping))
+
+
+def _tuple_of_strings(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return (value,)
+    if not isinstance(value, (list, tuple, set)):
+        return ()
+    return tuple(str(item) for item in value)
+
+
+def _tuple_of_spell_values(value: object) -> tuple[dict[str, Any] | str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return (value,)
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(
+        dict(item) if isinstance(item, Mapping) else str(item)
+        for item in value
+    )
