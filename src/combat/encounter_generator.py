@@ -7,11 +7,16 @@ from dataclasses import dataclass, field
 import random
 
 from combat.evaluation_scenarios import (
+    level_1_fighter_cleric_vs_two_goblins,
     level_1_fighter_vs_goblin,
+    level_2_fighter_cleric_vs_goblin_bandit,
     level_3_cleric_life_fighter_vs_orc_goblin,
     level_3_fighter_champion_vs_orc,
+    level_4_fighter_cleric_vs_orc_skeleton,
     level_5_full_party_vs_mixed_enemies,
     level_5_melee_party_difficult_terrain_vs_archers,
+    level_5_ranged_party_cover_map_vs_mixed_enemies,
+    level_5_wizard_evoker_vs_fire_elemental,
     level_5_wizard_evoker_vs_three_goblins,
 )
 from combat.environment import CombatEnvironment
@@ -187,7 +192,7 @@ def get_curriculum_stage(level: int) -> CurriculumStage:
 
 
 def clamp_curriculum_level(level: int) -> int:
-    """Clamp curriculum level to the supported 1-9 range."""
+    """Clamp curriculum level to the supported curriculum range."""
 
     return max(1, min(MAX_CURRICULUM_LEVEL, int(level)))
 
@@ -248,48 +253,72 @@ CURRICULUM_STAGES: tuple[CurriculumStage, ...] = (
     ),
     CurriculumStage(
         level=2,
-        name="1 Fighter level 1 vs 2 Goblins",
-        description="Early outnumbered fight with melee and ranged goblins.",
-        factory=_curriculum_level_2_state,
+        name="Level 1 Fighter + Cleric vs 2 Goblins",
+        description="Low-level party fight with early support behavior.",
+        factory=level_1_fighter_cleric_vs_two_goblins,
     ),
     CurriculumStage(
         level=3,
+        name="Level 2 Fighter + Cleric vs Goblin + Bandit",
+        description="Early resources before subclasses against mixed humanoids.",
+        factory=level_2_fighter_cleric_vs_goblin_bandit,
+    ),
+    CurriculumStage(
+        level=4,
         name="Fighter level 3 Champion vs Orc",
         description="Subclass fighter against a single durable brute.",
         factory=level_3_fighter_champion_vs_orc,
     ),
     CurriculumStage(
-        level=4,
+        level=5,
         name="Fighter + Cleric vs Orc + Goblins",
         description="Small party fight with healing and mixed enemies.",
         factory=level_3_cleric_life_fighter_vs_orc_goblin,
     ),
     CurriculumStage(
-        level=5,
+        level=6,
+        name="Level 4 Fighter + Cleric vs Orc + Skeleton Archer",
+        description="ASI-era party against brute pressure and ranged undead.",
+        factory=level_4_fighter_cleric_vs_orc_skeleton,
+    ),
+    CurriculumStage(
+        level=7,
         name="Wizard scenarios",
         description="Evoker spellcasting and AoE targeting against clustered enemies.",
         factory=level_5_wizard_evoker_vs_three_goblins,
     ),
     CurriculumStage(
-        level=6,
+        level=8,
+        name="Wizard vs FireElementalSimple",
+        description="Damage-type awareness against fire immunity and weapon resistance.",
+        factory=level_5_wizard_evoker_vs_fire_elemental,
+    ),
+    CurriculumStage(
+        level=9,
         name="mixed party vs mixed enemies",
         description="Full level 5 party against varied monster roles.",
         factory=level_5_full_party_vs_mixed_enemies,
     ),
     CurriculumStage(
-        level=7,
+        level=10,
+        name="ranged party on map with cover",
+        description="Ranged party tactics with cover and ranged enemies.",
+        factory=level_5_ranged_party_cover_map_vs_mixed_enemies,
+    ),
+    CurriculumStage(
+        level=11,
         name="enemies with resistances/immunities",
         description="Resistant and immune enemies that require damage-type awareness.",
         factory=_curriculum_resistance_state,
     ),
     CurriculumStage(
-        level=8,
+        level=12,
         name="maps with obstacles and cover",
         description="Map reasoning with blocked cells, low cover and high cover.",
         factory=_curriculum_obstacle_cover_state,
     ),
     CurriculumStage(
-        level=9,
+        level=13,
         name="maps with difficult terrain and ranged enemies",
         description="Movement-cost planning against ranged enemies on difficult terrain.",
         factory=level_5_melee_party_difficult_terrain_vs_archers,

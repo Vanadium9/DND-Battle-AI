@@ -111,6 +111,115 @@ def test_collect_rollout_stores_ppo_fields() -> None:
     assert rollout.masks["option_index"][0].shape == (trainer.model.option_count,)
 
 
+def test_collect_rollout_resets_episode_on_step_timeout() -> None:
+    trainer = make_trainer(rollout_steps=4)
+
+    rollout = trainer.collect_rollout(max_episode_steps=2)
+
+    assert len(rollout) == 4
+    assert rollout.episode_timeouts >= 1
+    assert None in rollout.episode_winners
+    assert any(rollout.dones)
+
+
+def test_collect_rollout_supports_fast_masks_and_profile_timings() -> None:
+    trainer = make_trainer(rollout_steps=4)
+    trainer.fast_action_masks = True
+    trainer.fast_observation = True
+    trainer.profile_rollout = True
+
+    rollout = trainer.collect_rollout(max_episode_steps=4)
+    metrics = trainer.update(rollout)
+
+    assert len(rollout) == 4
+    assert rollout.profile_times["mask"] >= 0.0
+    assert rollout.profile_times["observation"] >= 0.0
+    assert rollout.profile_times["model_act"] >= 0.0
+    assert rollout.profile_times["env_step"] >= 0.0
+    assert rollout.profile_times["update"] >= 0.0
+    assert all(torch.isfinite(torch.tensor(value)) for value in metrics.values())
+
+
+def test_collect_rollout_supports_multiple_environments() -> None:
+    generator = EncounterGenerator(seed=33)
+    environment = generator.generate_environment(log_to_console=False)
+    model = PPOActorCritic(target_count=6, move_count=64, hidden_sizes=(32,))
+    trainer = PPOTrainer(
+        environment=environment,
+        model=model,
+        config=PPOConfig(
+            rollout_steps=6,
+            update_epochs=1,
+            minibatch_size=3,
+            checkpoint_dir=str(CHECKPOINT_DIR),
+        ),
+        encounter_generator=generator,
+        num_envs=3,
+        fast_action_masks=True,
+    )
+
+    rollout = trainer.collect_rollout(max_episode_steps=3)
+    metrics = trainer.update(rollout)
+
+    assert trainer.num_envs == 3
+    assert len(trainer.environments) == 3
+    assert len(rollout) == 6
+    assert rollout.last_values_by_env
+    assert len(set(rollout.env_ids)) > 1
+    assert all(torch.isfinite(torch.tensor(value)) for value in metrics.values())
+
+
+def test_multi_environment_rollout_tracks_advantages_per_environment() -> None:
+    trainer = make_trainer(rollout_steps=4)
+    rollout = RolloutBuffer(
+        rewards=[1.0, 10.0, 1.0, 10.0],
+        dones=[False, False, True, True],
+        values=[
+            torch.tensor(0.0),
+            torch.tensor(0.0),
+            torch.tensor(0.0),
+            torch.tensor(0.0),
+        ],
+        next_values=[
+            torch.tensor(0.0),
+            torch.tensor(0.0),
+            torch.tensor(0.0),
+            torch.tensor(0.0),
+        ],
+        env_ids=[0, 1, 0, 1],
+    )
+    trainer.config.gamma = 1.0
+    trainer.config.gae_lambda = 1.0
+
+    returns, advantages = trainer.compute_returns_and_advantages(rollout)
+
+    assert torch.allclose(returns.cpu(), torch.tensor([2.0, 20.0, 1.0, 10.0]))
+    assert torch.allclose(advantages.cpu(), returns.cpu())
+
+
+def test_multi_environment_rollout_bootstraps_each_environment() -> None:
+    trainer = make_trainer(rollout_steps=4)
+    rollout = RolloutBuffer(
+        rewards=[1.0, 10.0, 1.0, 10.0],
+        dones=[False, False, True, True],
+        values=[
+            torch.tensor(0.0),
+            torch.tensor(0.0),
+            torch.tensor(0.0),
+            torch.tensor(0.0),
+        ],
+        env_ids=[0, 1, 0, 1],
+        last_values_by_env={0: 0.0, 1: 0.0},
+    )
+    trainer.config.gamma = 1.0
+    trainer.config.gae_lambda = 1.0
+
+    returns, advantages = trainer.compute_returns_and_advantages(rollout)
+
+    assert torch.allclose(returns.cpu(), torch.tensor([2.0, 20.0, 1.0, 10.0]))
+    assert torch.allclose(advantages.cpu(), returns.cpu())
+
+
 def test_collect_episode_returns_rollout_and_episode_stats() -> None:
     trainer = make_trainer(rollout_steps=4)
 
@@ -167,6 +276,26 @@ def test_gnn_trainer_runs_with_centralized_critic_enabled() -> None:
     )
     assert set(HEAD_ORDER).issubset(data["actions"])
     assert all(torch.isfinite(torch.tensor(value)) for value in metrics.values())
+
+
+def test_gnn_trainer_pads_all_policy_head_masks() -> None:
+    trainer = make_gnn_trainer(centralized_critic=False)
+    trainer.fast_action_masks = True
+
+    rollout = trainer.collect_rollout(max_episode_steps=2)
+    data = rollout.to_tensors(torch.device("cpu"))
+
+    assert set(HEAD_ORDER).issubset(data["masks"])
+    for key in (
+        "bonus_action_type",
+        "reaction_type",
+        "class_feature",
+        "spell_index",
+        "slot_level",
+        "item_index",
+    ):
+        assert data["masks"][key].sum(dim=1).eq(1).all()
+        assert data["masks"][key][:, 0].all()
 
 
 def test_gnn_trainer_runs_with_centralized_critic_disabled() -> None:
@@ -254,5 +383,5 @@ def test_train_curriculum_config_loads_from_yaml() -> None:
 
     assert config.enabled is True
     assert config.initial_level == 1
-    assert config.max_level == 9
+    assert config.max_level == 13
     assert config.win_rate_threshold == 0.75

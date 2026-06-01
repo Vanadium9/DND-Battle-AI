@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import heapq
 from typing import Iterable
 
@@ -24,6 +24,24 @@ class GridMap:
     width: int
     height: int
     terrain_grid: tuple[tuple[TerrainType, ...], ...] | None = None
+    _neighbor_cost_cache: dict[tuple[int, int], tuple[tuple[Position, int], ...]] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    _line_of_sight_cache: dict[tuple[int, int, int, int], bool] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    _cover_cache: dict[tuple[int, int, int, int], CoverType] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         if self.width <= 0:
@@ -79,11 +97,17 @@ class GridMap:
     def neighbor_costs(self, position: Position) -> list[tuple[Position, int]]:
         """Return walkable cardinal neighbors with terrain movement costs."""
 
+        key = (position.x, position.y)
+        cached = self._neighbor_cost_cache.get(key)
+        if cached is not None:
+            return list(cached)
+
         result: list[tuple[Position, int]] = []
         for neighbor in self.neighbors(position):
             movement_cost = self.movement_cost(neighbor)
             if movement_cost is not None:
                 result.append((neighbor, movement_cost))
+        self._neighbor_cost_cache[key] = tuple(result)
         return result
 
     def is_occupied(
@@ -176,7 +200,14 @@ class GridMap:
 
         if not self.in_bounds(start) or not self.in_bounds(end):
             return False
-        return line_of_sight(start, end, self.terrain_at)
+        key = (start.x, start.y, end.x, end.y)
+        cached = self._line_of_sight_cache.get(key)
+        if cached is not None:
+            return cached
+        visible = line_of_sight(start, end, self.terrain_at)
+        self._line_of_sight_cache[key] = visible
+        self._line_of_sight_cache[(end.x, end.y, start.x, start.y)] = visible
+        return visible
 
     def has_line_of_sight(self, start: Position, end: Position) -> bool:
         """Compatibility alias used by action space and common actions."""
@@ -188,7 +219,13 @@ class GridMap:
 
         if not self.in_bounds(attacker_pos) or not self.in_bounds(target_pos):
             return CoverType.FULL_COVER
-        return get_cover_between(attacker_pos, target_pos, self.terrain_at)
+        key = (attacker_pos.x, attacker_pos.y, target_pos.x, target_pos.y)
+        cached = self._cover_cache.get(key)
+        if cached is not None:
+            return cached
+        cover = get_cover_between(attacker_pos, target_pos, self.terrain_at)
+        self._cover_cache[key] = cover
+        return cover
 
     def _normalize_terrain_grid(self) -> tuple[tuple[TerrainType, ...], ...]:
         if self.terrain_grid is None:

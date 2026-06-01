@@ -1,24 +1,32 @@
 enabled: true
 initial_level: 1
-max_level: 9
+max_level: 13
 win_rate_threshold: 0.75
 window_size: 20
 levels:
   - level: 1
     name: 1 Fighter level 1 vs 1 Goblin
   - level: 2
-    name: 1 Fighter level 1 vs 2 Goblins
+    name: Level 1 Fighter + Cleric vs 2 Goblins
   - level: 3
-    name: Fighter level 3 Champion vs Orc
+    name: Level 2 Fighter + Cleric vs Goblin + Bandit
   - level: 4
-    name: Fighter + Cleric vs Orc + Goblins
+    name: Fighter level 3 Champion vs Orc
   - level: 5
-    name: Wizard scenarios
+    name: Fighter + Cleric vs Orc + Goblins
   - level: 6
-    name: mixed party vs mixed enemies
+    name: Level 4 Fighter + Cleric vs Orc + Skeleton Archer
   - level: 7
-    name: enemies with resistances/immunities
+    name: Wizard scenarios
   - level: 8
-    name: maps with obstacles and cover
+    name: Wizard vs FireElementalSimple
   - level: 9
+    name: mixed party vs mixed enemies
+  - level: 10
+    name: ranged party on map with cover
+  - level: 11
+    name: enemies with resistances/immunities
+  - level: 12
+    name: maps with obstacles and cover
+  - level: 13
     name: maps with difficult terrain and ranged enemies

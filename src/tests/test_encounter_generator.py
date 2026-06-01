@@ -75,9 +75,13 @@ def test_encounter_generator_generate_switches_return_type() -> None:
 
 
 def test_curriculum_stages_cover_expected_difficulty_levels() -> None:
-    assert len(CURRICULUM_STAGES) == 9
-    assert MAX_CURRICULUM_LEVEL == 9
-    assert [stage.level for stage in CURRICULUM_STAGES] == list(range(1, 10))
+    assert len(CURRICULUM_STAGES) == 13
+    assert MAX_CURRICULUM_LEVEL == 13
+    assert [stage.level for stage in CURRICULUM_STAGES] == list(range(1, 14))
+    stage_names = " ".join(stage.name for stage in CURRICULUM_STAGES)
+    assert "Cleric" in stage_names
+    assert "Wizard" in stage_names
+    assert "FireElementalSimple" in stage_names
 
 
 def test_curriculum_level_generates_fixed_encounter() -> None:
@@ -87,9 +91,8 @@ def test_curriculum_level_generates_fixed_encounter() -> None:
     players = combat_state.characters_for_team(Team.PLAYERS)
     enemies = combat_state.characters_for_team(Team.ENEMIES)
 
-    assert len(players) == 1
-    assert players[0].name == "Fighter Level 1 Basic"
-    assert players[0].level == 1
+    assert len(players) == 2
+    assert {player.class_name for player in players} == {"Fighter", "Cleric"}
     assert len(enemies) == 2
     assert {enemy.name for enemy in enemies} == {"Goblin Melee", "Goblin Archer"}
 
@@ -97,8 +100,8 @@ def test_curriculum_level_generates_fixed_encounter() -> None:
 def test_curriculum_map_levels_include_cover_obstacles_and_difficult_terrain() -> None:
     generator = EncounterGenerator(seed=4)
 
-    cover_state = generator.generate_curriculum_state(8)
-    difficult_state = generator.generate_curriculum_state(9)
+    cover_state = generator.generate_curriculum_state(12)
+    difficult_state = generator.generate_curriculum_state(13)
     cover_terrain = {
         terrain
         for row in cover_state.grid_map.terrain_grid

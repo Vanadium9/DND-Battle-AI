@@ -412,52 +412,63 @@ class GNNPPOActorCritic(nn.Module):
                 logits=_mask_logits(
                     outputs["action_category_logits"],
                     prepared_masks["action_category"],
-                )
+                ),
+                validate_args=False,
             ),
             "main_action_type": Categorical(
                 logits=_mask_logits(
                     outputs["main_action_type_logits"],
                     prepared_masks["main_action_type"],
-                )
+                ),
+                validate_args=False,
             ),
             "bonus_action_type": Categorical(
                 logits=_mask_logits(
                     outputs["bonus_action_type_logits"],
                     prepared_masks["bonus_action_type"],
-                )
+                ),
+                validate_args=False,
             ),
             "reaction_type": Categorical(
                 logits=_mask_logits(
                     outputs["reaction_type_logits"],
                     prepared_masks["reaction_type"],
-                )
+                ),
+                validate_args=False,
             ),
             "class_feature": Categorical(
                 logits=_mask_logits(
                     outputs["class_feature_logits"],
                     prepared_masks["class_feature"],
-                )
+                ),
+                validate_args=False,
             ),
             "target_index": Categorical(
-                logits=_mask_logits(outputs["target_logits"], prepared_masks["target_index"])
+                logits=_mask_logits(outputs["target_logits"], prepared_masks["target_index"]),
+                validate_args=False,
             ),
             "move_index": Categorical(
-                logits=_mask_logits(outputs["move_logits"], prepared_masks["move_index"])
+                logits=_mask_logits(outputs["move_logits"], prepared_masks["move_index"]),
+                validate_args=False,
             ),
             "spell_index": Categorical(
-                logits=_mask_logits(outputs["spell_logits"], prepared_masks["spell_index"])
+                logits=_mask_logits(outputs["spell_logits"], prepared_masks["spell_index"]),
+                validate_args=False,
             ),
             "slot_level": Categorical(
                 logits=_mask_logits(
                     outputs["slot_level_logits"],
                     prepared_masks["slot_level"],
-                )
+                ),
+                validate_args=False,
             ),
             "item_index": Categorical(
-                logits=_mask_logits(outputs["item_logits"], prepared_masks["item_index"])
+                logits=_mask_logits(outputs["item_logits"], prepared_masks["item_index"]),
+                validate_args=False,
             ),
             "option_index": Categorical(
-                logits=_mask_logits(outputs["option_logits"], prepared_masks["option_index"])
+                logits=_mask_logits(outputs["option_logits"], prepared_masks["option_index"]),
+                validate_args=False,
             ),
             "masks": prepared_masks,
         }

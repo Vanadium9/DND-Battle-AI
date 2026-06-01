@@ -2729,3 +2729,179 @@ ROADMAP должен обновиться:
 - обновить `scripts/train_ppo.py`, чтобы он поддерживал `--model-type gnn/mlp`
 - для GNN по умолчанию сохранять checkpoint в `checkpoints/gnn_ppo_actor_critic.pt`
 - для MLP по умолчанию сохранять checkpoint в `checkpoints/ppo_actor_critic.pt`
+
+## 72. Запрос: Перевести train_ppo на fixed rollout batches
+
+Цель:
+- повысить полезную загрузку GPU на PPO update
+- не обновлять модель после каждого отдельного боя
+
+Требования:
+- использовать `PPOTrainer.collect_rollout()` вместо цикла `collect_episode() -> update()`
+- добавить CLI-параметры:
+  - `--updates`
+  - `--rollout-steps`
+  - `--minibatch-size`
+  - `--update-epochs`
+  - `--log-interval`
+- оставить `--episodes` как совместимый alias для числа update-итераций
+- выводить update metrics:
+  - rollout steps
+  - finished episodes
+  - win rate
+  - average step reward
+  - policy loss
+  - value loss
+  - entropy
+  - loss
+  - checkpoint path
+
+## 73. Запрос: Добавить max episode steps для PPO rollout
+
+Проблема:
+- при batch-обучении `episodes_finished=0`, `win_rate=0`
+- политика может слишком долго не завершать бой, поэтому rollout не даёт завершённых эпизодов
+
+Требования:
+- добавить максимальное количество шагов на эпизод внутри `PPOTrainer.collect_rollout`
+- при таймауте завершать текущий episode как `done=True`
+- сбрасывать среду на новый бой после таймаута
+- учитывать таймауты отдельно от побед/поражений
+- добавить CLI-параметр `--max-episode-steps`
+- выводить `completed` и `timeouts` в training log
+
+## 74. Запрос: Performance-pass перед расширением curriculum
+
+Цель:
+- снизить CPU bottleneck перед добавлением полного набора сценариев обучения
+- не ломать GUI/evaluation full action masks
+
+Требования:
+- добавить быстрый training action mask с ограниченным набором действий для раннего обучения
+- оставить полный action mask для GUI и evaluation
+- добавить кэш в `GridMap` для повторных LoS/cover/neighbors расчётов
+- добавить profiling metrics в PPO rollout:
+  - observation
+  - mask
+  - model_act
+  - decode
+  - env_step
+  - update
+- добавить CLI-флаги:
+  - `--fast-action-masks`
+  - `--profile-training`
+- выводить timing breakdown в training log при включённом profiling
+
+## 75. Запрос: Продолжить пошаговую оптимизацию PPO/GNN training
+
+Цель:
+- уменьшать лишнюю работу в GNN PPO step-by-step
+- оптимизировать обучение постепенно, не ломая GUI/evaluation
+
+Первый шаг:
+- передавать masks для всех GNN policy heads
+- дополнительные heads, которые пока не используются декодером (`spell_index`, `item_index`, `slot_level`, `reaction_type`, `bonus_action_type`, `class_feature`), должны быть детерминированно замаскированы на noop index 0
+- уменьшить лишний entropy/log_prob noise от неиспользуемых heads
+- добавить тесты, что GNN rollout содержит masks для всех heads
+
+Второй шаг:
+- отключить `validate_args` у `torch.distributions.Categorical` в PPO/GNN моделях
+- оставить валидацию действий на уровне masks/decode, но убрать runtime overhead PyTorch distribution validation
+
+Третий шаг:
+- использовать CPU raw masks для `decode_action`
+- использовать padded GPU masks только для model forward/evaluate
+- убрать лишнюю CUDA synchronization при decode
+- объединить чтение action indices с GPU в один CPU transfer вместо нескольких `.item()`
+- добавить `decode_fast_training_action` для reduced action space, чтобы fast training не проходил через полный D&D decoder
+
+## 76. Запрос: Добавить parallel/vectorized rollout для PPO training
+
+Цель:
+- ускорить сбор rollout за счёт нескольких независимых боёв внутри одного PPOTrainer
+- уменьшить overhead мелких GPU-вызовов через batched `policy.act`
+- сохранить текущий combat engine без multiprocessing и без дублирования правил боя
+
+Требования:
+- добавить параметр `num_envs` в PPOTrainer
+- добавить CLI-флаг `--num-envs` в `scripts/train_ppo.py`
+- при `num_envs > 1` создавать несколько `CombatEnvironment` через `EncounterGenerator`
+- собирать rollout из нескольких env round-robin
+- если активные политики одинаковые torch-модели, выполнять batched action selection
+- считать returns/advantages отдельно по `env_id`, чтобы GAE не смешивал разные бои
+- сохранять корректные episode timeout/winner метрики для каждого env
+- добавить тесты multi-env rollout и per-env advantage calculation
+
+## 77. Запрос: Оптимизировать fast training action masks после замеров num_envs
+
+Контекст:
+- `num_envs=8` ускорил запуск относительно `num_envs=4`
+- после batching заметными bottleneck остались `model_act_ms`, `mask_ms`, `observation_ms`
+- для fast training полный D&D target validation не нужен на этапе построения маски, потому что combat engine всё равно валидирует действие при выполнении
+
+Требования:
+- не менять полный `build_action_masks` для GUI/evaluation
+- оптимизировать только `build_fast_training_action_masks`
+- заменить повторные `path_movement_cost` для movement candidates на один `movement_costs_from`
+- упростить fast attack mask до:
+  - actor может потратить Attack action
+  - target живой и вражеский
+  - target находится в пределах range доступного weapon
+- не выполнять в fast attack mask дорогие LoS/cover проверки
+- сохранить тесты fast action masks и PPO trainer
+
+## 78. Запрос: Добавить fast observation для warm-up PPO/GNN training
+
+Цель:
+- уменьшить CPU bottleneck на observation encoding после оптимизации `num_envs` и fast masks
+- сохранить совместимость checkpoint между fast warm-up и full fine-tuning
+
+Требования:
+- добавить опциональный режим `fast=True` в `encode_observation` и `encode_entity_observation`
+- размер actor/entity/map/global tensors должен остаться тем же, что в полном observation
+- в fast observation заменить дорогие признаки на приближения:
+  - не считать full LoS/cover для каждого entity
+  - не считать full reachable/pathfinding для каждого entity
+  - не считать full local map visibility
+  - не считать current cover status через всех врагов
+- добавить `fast_observation` в `PPOTrainer`
+- добавить CLI-флаг `--fast-observation` в `scripts/train_ppo.py`
+- полный observation по умолчанию оставить без изменений для GUI/evaluation/full training
+- добавить тесты, что fast/full observation имеют одинаковые shapes
+
+## 79. Запрос: Прокачать обучение под все поддержанные классы, врагов и карты
+
+Проблема:
+- если сразу обучать на всех классах, врагах, заклинаниях и типах карт, training time резко вырастет
+- модель должна получать сложность постепенно, иначе PPO будет собирать шумный опыт и долго не сходиться
+
+Цель:
+- сделать staged curriculum для Fighter/Cleric/Wizard, разных врагов, resistances/immunities и карт
+- подключить curriculum к `scripts/train_ppo.py`, а не держать его только внутри trainer/generator
+
+Требования:
+- расширить `CURRICULUM_STAGES` до последовательной лестницы:
+  - level 1 Fighter vs Goblin
+  - Fighter + Cleric против Goblins
+  - Fighter + Cleric против Goblin + Bandit
+  - Fighter Champion против Orc
+  - Cleric Life + Fighter против Orc + Goblin
+  - level 4 Fighter + Cleric против Orc + Skeleton Archer
+  - Wizard Evoker AoE scenarios
+  - Wizard vs FireElementalSimple
+  - full party vs mixed enemies
+  - ranged party on cover map
+  - enemies with resistances/immunities
+  - obstacle/cover map
+  - difficult terrain vs ranged enemies
+- обновить `configs/train_curriculum.yaml`
+- добавить CLI-флаги:
+  - `--curriculum`
+  - `--curriculum-config`
+  - `--curriculum-level`
+  - `--curriculum-max-level`
+  - `--curriculum-threshold`
+  - `--curriculum-window-size`
+- выводить активный curriculum level при запуске
+- печатать curriculum transition в training log
+- сохранить random training как режим по умолчанию, если `--curriculum` не указан

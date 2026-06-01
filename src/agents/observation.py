@@ -144,13 +144,23 @@ ENTITY_MASK_SIZE = MAX_ENTITY_COUNT
 ENTITY_GLOBAL_FEATURE_SIZE = GLOBAL_FEATURE_SIZE + 1
 
 
-def encode_observation(state: CombatState, actor_id: int) -> torch.Tensor:
+def encode_observation(
+    state: CombatState,
+    actor_id: int,
+    *,
+    fast: bool = False,
+) -> torch.Tensor:
     """Encode combat state as a flattened MLP-compatible observation vector."""
 
-    return flatten_entity_observation(encode_entity_observation(state, actor_id))
+    return flatten_entity_observation(encode_entity_observation(state, actor_id, fast=fast))
 
 
-def encode_entity_observation(state: CombatState, actor_id: int) -> EntityObservation:
+def encode_entity_observation(
+    state: CombatState,
+    actor_id: int,
+    *,
+    fast: bool = False,
+) -> EntityObservation:
     """Encode combat state from one actor's perspective as entity-based tensors."""
 
     actor = state.character_at(actor_id)
@@ -176,14 +186,17 @@ def encode_entity_observation(state: CombatState, actor_id: int) -> EntityObserv
         ),
     )
 
-    entity_rows, entity_mask = _encode_entity_rows(allies, enemies, actor, state)
+    entity_rows, entity_mask = _encode_entity_rows(allies, enemies, actor, state, fast=fast)
     return EntityObservation(
         actor_features=torch.tensor(
-            _encode_actor(actor, actor_id, state),
+            _encode_actor(actor, actor_id, state, fast=fast),
             dtype=torch.float32,
         ),
         entities_features=torch.tensor(entity_rows, dtype=torch.float32),
-        map_features=torch.tensor(_encode_map_features(state, actor), dtype=torch.float32),
+        map_features=torch.tensor(
+            _encode_fast_map_features(state, actor) if fast else _encode_map_features(state, actor),
+            dtype=torch.float32,
+        ),
         global_features=torch.tensor(
             _entity_global_feature_values(state, actor_id),
             dtype=torch.float32,
@@ -210,6 +223,8 @@ def _encode_entity_rows(
     enemies: list[tuple[int, Character]],
     actor: Character,
     state: CombatState,
+    *,
+    fast: bool = False,
 ) -> tuple[list[list[float]], list[float]]:
     rows: list[list[float]] = []
     mask: list[float] = []
@@ -220,6 +235,11 @@ def _encode_entity_rows(
                 rows.append(
                     [
                         *_encode_other_character(character, actor, state),
+                        float(_has_spells(character)),
+                    ]
+                    if not fast
+                    else [
+                        *_encode_fast_other_character(character, actor, state),
                         float(_has_spells(character)),
                     ]
                 )
@@ -240,6 +260,8 @@ def _encode_actor(
     actor: Character,
     actor_id: int,
     state: CombatState,
+    *,
+    fast: bool = False,
 ) -> list[float]:
     return [
         *_encode_base_character(actor, actor, state, present=True),
@@ -252,18 +274,22 @@ def _encode_actor(
         float(actor.prepared_action is not None),
         float(len(actor.weapons)),
         float(_has_spells(actor)),
-        float(_can_cast_spell(state, actor)),
-        float(_can_attack(state, actor)),
+        float(_fast_can_cast_spell(actor) if fast else _can_cast_spell(state, actor)),
+        float(_fast_can_attack(state, actor) if fast else _can_attack(state, actor)),
         float(_can_dash(actor)),
         float(_can_disengage(actor)),
         float(_can_dodge(actor)),
-        float(_can_hide(state, actor)),
+        float(False if fast else _can_hide(state, actor)),
         float(_can_help(state, actor_id, actor)),
-        float(_can_grapple(state, actor_id, actor)),
-        float(_can_shove(state, actor_id, actor)),
-        *_encode_actor_real_game_features(actor, state),
+        float(_fast_can_grapple_or_shove(state, actor) if fast else _can_grapple(state, actor_id, actor)),
+        float(_fast_can_grapple_or_shove(state, actor) if fast else _can_shove(state, actor_id, actor)),
+        *(
+            _encode_fast_actor_real_game_features(actor, state)
+            if fast
+            else _encode_actor_real_game_features(actor, state)
+        ),
         *_encode_available_damage_types(actor),
-        *_encode_actor_map_features(actor, state),
+        *(_encode_fast_actor_map_features(actor, state) if fast else _encode_actor_map_features(actor, state)),
         *_encode_actor_class_features(actor),
     ]
 
@@ -291,6 +317,32 @@ def _encode_actor_real_game_features(
         current_cover_status(state, actor),
         *terrain_around_features(state, actor),
         visible_enemies_count(state, actor),
+    ]
+
+
+def _encode_fast_actor_real_game_features(
+    actor: Character,
+    state: CombatState,
+) -> list[float]:
+    return [
+        normalized_level(actor),
+        normalized_proficiency_bonus(actor),
+        class_id(actor),
+        subclass_id(actor),
+        race_id(actor),
+        role_id(actor),
+        *feat_flags(actor),
+        float(actor.action_economy.action_available),
+        float(actor.action_economy.bonus_action_available),
+        float(actor.action_economy.reaction_available),
+        float(actor.action_economy.movement_remaining),
+        *class_resource_flags(actor),
+        *spell_slot_features(actor),
+        *prepared_spell_flags(actor),
+        *inventory_usable_item_flags(actor),
+        0.0,
+        *terrain_around_features(state, actor),
+        _fast_visible_enemies_count(state, actor),
     ]
 
 
@@ -351,6 +403,28 @@ def _encode_other_character(
     ]
 
 
+def _encode_fast_other_character(
+    character: Character,
+    actor: Character,
+    state: CombatState,
+) -> list[float]:
+    return [
+        *_encode_base_character(character, actor, state, present=True),
+        float(character.prone),
+        float(character.grappled),
+        float(character.hidden),
+        float(character.dodging_until_start_of_next_turn),
+        float(_is_in_melee_reach(actor, character, state)),
+        float(_fast_can_attack_target(state, actor, character)),
+        float(_can_help_against_target(state, actor, character)),
+        float(_fast_can_grapple_or_shove_target(state, actor, character)),
+        float(_fast_can_grapple_or_shove_target(state, actor, character)),
+        *_encode_damage_profile(character),
+        *_encode_other_entity_profile(character, actor, state),
+        *_encode_fast_other_map_features(character, actor, state),
+    ]
+
+
 def _encode_other_entity_profile(
     character: Character,
     actor: Character,
@@ -381,6 +455,20 @@ def _encode_other_map_features(
         _cover_value(_cover_between(state, actor.position, character.position)),
         float(_distance(actor.position, character.position, state)),
         reachable_by_actor(state, actor, character),
+    ]
+
+
+def _encode_fast_other_map_features(
+    character: Character,
+    actor: Character,
+    state: CombatState,
+) -> list[float]:
+    distance = _distance(actor.position, character.position, state)
+    return [
+        1.0,
+        0.0,
+        float(distance),
+        float(distance <= max(1, actor.action_economy.movement_remaining + 1)),
     ]
 
 
@@ -416,6 +504,43 @@ def _encode_map_features(state: CombatState, actor: Character) -> list[list[floa
     return rows
 
 
+def _encode_fast_map_features(state: CombatState, actor: Character) -> list[list[float]]:
+    grid_map = state.grid_map
+    movement_remaining = max(0, int(actor.action_economy.movement_remaining))
+    rows: list[list[float]] = []
+    for dy in range(-LOCAL_MAP_RADIUS, LOCAL_MAP_RADIUS + 1):
+        for dx in range(-LOCAL_MAP_RADIUS, LOCAL_MAP_RADIUS + 1):
+            position = Position(actor.position.x + dx, actor.position.y + dy)
+            terrain_type = terrain_at_for_map_features(state, position)
+            movement_cost = 0.0
+            blocked = True
+            if grid_map is not None and grid_map.in_bounds(position):
+                cost = grid_map.movement_cost(position)
+                movement_cost = float(cost or 0)
+                blocked = cost is None
+            cover_cell = terrain_type in {
+                TerrainType.LOW_COVER,
+                TerrainType.HIGH_COVER,
+            }
+            distance = _distance(actor.position, position, state)
+            reachable = (
+                not blocked
+                and position != actor.position
+                and distance <= movement_remaining
+            )
+            rows.append(
+                [
+                    *[float(terrain_type is candidate) for candidate in TERRAIN_FEATURE_TYPES],
+                    float(blocked),
+                    float(cover_cell),
+                    movement_cost,
+                    float(reachable),
+                    1.0,
+                ]
+            )
+    return rows
+
+
 def _encode_actor_map_features(actor: Character, state: CombatState) -> list[float]:
     directions = (
         Position(actor.position.x, actor.position.y - 1),
@@ -432,6 +557,31 @@ def _encode_actor_map_features(actor: Character, state: CombatState) -> list[flo
         *terrain_values,
         *movement_costs,
         float(len(positive_costs)),
+        float(average_cost),
+    ]
+
+
+def _encode_fast_actor_map_features(actor: Character, state: CombatState) -> list[float]:
+    directions = (
+        Position(actor.position.x, actor.position.y - 1),
+        Position(actor.position.x + 1, actor.position.y),
+        Position(actor.position.x, actor.position.y + 1),
+        Position(actor.position.x - 1, actor.position.y),
+    )
+    terrain_values = [_terrain_value(state, position) for position in directions]
+    movement_costs = [_movement_cost_value(state, position) for position in directions]
+    reachable_count = sum(
+        1
+        for position in directions
+        if _distance(actor.position, position, state) <= actor.action_economy.movement_remaining
+        and _movement_cost_value(state, position) > 0
+    )
+    positive_costs = [cost for cost in movement_costs if cost > 0]
+    average_cost = sum(positive_costs) / len(positive_costs) if positive_costs else 0.0
+    return [
+        *terrain_values,
+        *movement_costs,
+        float(reachable_count),
         float(average_cost),
     ]
 
@@ -513,6 +663,19 @@ def _has_ranged_attack(character: Character) -> bool:
     )
 
 
+def _fast_visible_enemies_count(state: CombatState, actor: Character) -> float:
+    return float(
+        sum(
+            1
+            for character in state.characters
+            if character is not actor
+            and character.team != actor.team
+            and character.is_alive
+            and not getattr(character, "hidden", False)
+        )
+    )
+
+
 def _encode_available_damage_types(character: Character) -> list[float]:
     return available_damage_type_flags(character)
 
@@ -568,9 +731,27 @@ def _can_cast_spell(state: CombatState, actor: Character) -> bool:
     )
 
 
+def _fast_can_cast_spell(actor: Character) -> bool:
+    return (
+        _can_spend_action(actor, COMMON_ACTION_CAST_SPELL)
+        and _spell_system_available(actor)
+        and bool(_available_spells(actor, "action"))
+    )
+
+
 def _can_attack(state: CombatState, actor: Character) -> bool:
     return any(
         _can_attack_target(state, actor, target)
+        for target in state.characters
+        if target is not actor
+    )
+
+
+def _fast_can_attack(state: CombatState, actor: Character) -> bool:
+    if not _can_spend_action(actor, COMMON_ACTION_ATTACK):
+        return False
+    return any(
+        _fast_can_attack_target(state, actor, target)
         for target in state.characters
         if target is not actor
     )
@@ -647,6 +828,23 @@ def _can_attack_target(
     )
 
 
+def _fast_can_attack_target(
+    state: CombatState,
+    actor: Character,
+    target: Character,
+) -> bool:
+    if not _can_spend_action(actor, COMMON_ACTION_ATTACK):
+        return False
+    return any(
+        target is not actor
+        and target.team != actor.team
+        and target.is_alive
+        and weapon.available
+        and _distance(actor.position, target.position, state) <= weapon.range
+        for weapon in actor.available_weapons
+    )
+
+
 def _is_valid_weapon_target(
     state: CombatState,
     actor: Character,
@@ -700,6 +898,30 @@ def _can_shove_target(
         actor,
         target,
         COMMON_ACTION_SHOVE,
+    )
+
+
+def _fast_can_grapple_or_shove(state: CombatState, actor: Character) -> bool:
+    if not actor.can_take_turn or not actor.action_economy.action_available:
+        return False
+    return any(
+        _fast_can_grapple_or_shove_target(state, actor, target)
+        for target in state.characters
+        if target is not actor
+    )
+
+
+def _fast_can_grapple_or_shove_target(
+    state: CombatState,
+    actor: Character,
+    target: Character,
+) -> bool:
+    return (
+        COMMON_ACTION_ATTACK in actor.common_actions
+        and target is not actor
+        and target.team != actor.team
+        and target.is_alive
+        and _is_in_melee_reach(actor, target, state)
     )
 
 

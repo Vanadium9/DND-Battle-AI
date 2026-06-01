@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 import logging
 from pathlib import Path
+import time
 from types import SimpleNamespace
 from typing import Any
 
@@ -18,7 +19,9 @@ from agents import (
     ActionCategory,
     MainActionType,
     build_action_masks,
+    build_fast_training_action_masks,
     decode_action,
+    decode_fast_training_action,
     encode_entity_observation,
     encode_observation,
 )
@@ -71,10 +74,15 @@ class RolloutBuffer:
             "option_index": [],
         }
     )
+    next_values: list[torch.Tensor] = field(default_factory=list)
     actor_ids: list[int] = field(default_factory=list)
     team_ids: list[int] = field(default_factory=list)
+    env_ids: list[int] = field(default_factory=list)
     episode_winners: list[Team | None] = field(default_factory=list)
+    episode_timeouts: int = 0
+    profile_times: dict[str, float] = field(default_factory=dict)
     last_value: float = 0.0
+    last_values_by_env: dict[int, float] = field(default_factory=dict)
 
     def append(
         self,
@@ -86,6 +94,8 @@ class RolloutBuffer:
         critic_observation: Any | None = None,
         actor_id: int | None = None,
         team: Team | None = None,
+        env_id: int = 0,
+        next_value: torch.Tensor | float | None = None,
     ) -> None:
         actor_observation = _detach_observation(observation)
         critic_observation = _detach_observation(
@@ -98,8 +108,11 @@ class RolloutBuffer:
         self.rewards.append(float(reward))
         self.dones.append(bool(done))
         self.values.append(action["value"].detach().cpu().reshape(()))
+        if next_value is not None:
+            self.next_values.append(torch.as_tensor(next_value).detach().cpu().reshape(()))
         self.actor_ids.append(-1 if actor_id is None else int(actor_id))
         self.team_ids.append(_team_id(team))
+        self.env_ids.append(int(env_id))
 
         for key, value in action.items():
             if key in {"log_prob", "entropy", "value"}:
@@ -134,6 +147,11 @@ class RolloutBuffer:
             if len(self.team_ids) == len(self.rewards)
             else [-1] * len(self.rewards)
         )
+        env_ids = (
+            self.env_ids
+            if len(self.env_ids) == len(self.rewards)
+            else [0] * len(self.rewards)
+        )
 
         return {
             "observations": _stack_observations(self.observations, device),
@@ -164,6 +182,11 @@ class RolloutBuffer:
             ),
             "team_ids": torch.tensor(
                 team_ids,
+                dtype=torch.long,
+                device=device,
+            ),
+            "env_ids": torch.tensor(
+                env_ids,
                 dtype=torch.long,
                 device=device,
             ),
@@ -238,8 +261,14 @@ class PPOTrainer:
         trainable_teams: set[Team] | list[Team] | tuple[Team, ...] | None = None,
         self_play_config: SelfPlayConfig | None = None,
         self_play_manager: SelfPlayManager | None = None,
+        fast_action_masks: bool = False,
+        fast_observation: bool = False,
+        profile_rollout: bool = False,
+        num_envs: int = 1,
     ) -> None:
         self.environment = environment
+        self.num_envs = max(1, int(num_envs))
+        self.environments: list[CombatEnvironment] = [environment]
         self.config = config or PPOConfig()
         self.device = torch.device(device or "cpu")
         self.model = model or (
@@ -264,6 +293,9 @@ class PPOTrainer:
         self.self_play_manager = self_play_manager or (
             SelfPlayManager(self_play_config) if self_play_config is not None else None
         )
+        self.fast_action_masks = bool(fast_action_masks)
+        self.fast_observation = bool(fast_observation)
+        self.profile_rollout = bool(profile_rollout)
         self.optimizer = optimizer or torch.optim.Adam(
             self.model.parameters(),
             lr=self.config.learning_rate,
@@ -290,6 +322,7 @@ class PPOTrainer:
         self.curriculum_transition_log: list[str] = []
         if self.curriculum_config.enabled and self.encounter_generator is not None:
             self.encounter_generator.set_curriculum_level(self.current_curriculum_level)
+        self._initialize_parallel_environments()
 
     def collect_episode(
         self,
@@ -360,63 +393,200 @@ class PPOTrainer:
         self.record_curriculum_result(stats.winner)
         return rollout, stats
 
-    def collect_rollout(self, rollout_steps: int | None = None) -> RolloutBuffer:
-        """Collect one fixed-length rollout from the environment."""
+    def collect_rollout(
+        self,
+        rollout_steps: int | None = None,
+        max_episode_steps: int | None = None,
+    ) -> RolloutBuffer:
+        """Collect one fixed-length rollout from one or more environments."""
 
         steps = rollout_steps or self.config.rollout_steps
         if steps <= 0:
             raise ValueError("rollout_steps must be greater than zero")
+        if max_episode_steps is not None and max_episode_steps <= 0:
+            raise ValueError("max_episode_steps must be greater than zero")
 
         rollout = RolloutBuffer()
+        if self.profile_rollout:
+            rollout.profile_times = {
+                "observation": 0.0,
+                "mask": 0.0,
+                "model_act": 0.0,
+                "decode": 0.0,
+                "env_step": 0.0,
+                "update": 0.0,
+            }
+        episode_steps = [0 for _ in self.environments]
         self._set_policies_eval()
 
-        for _ in range(steps):
-            if self.environment.is_done():
-                self._reset_environment_for_episode()
+        while len(rollout) < steps:
+            active_entries = self._prepare_rollout_entries(
+                rollout,
+                steps - len(rollout),
+                episode_steps,
+            )
+            if not active_entries:
+                break
 
-            state = self.environment.combat_state
-            actor_id = self._active_actor_id()
+            started = time.perf_counter()
+            with torch.no_grad():
+                action_outputs = self._act_for_rollout_entries(active_entries)
+            self._add_profile_time(rollout, "model_act", started)
+
+            for entry, action_output in zip(active_entries, action_outputs):
+                env_index = entry["env_index"]
+                environment = self.environments[env_index]
+                state = entry["state"]
+                actor_id = entry["actor_id"]
+                actor = entry["actor"]
+
+                started = time.perf_counter()
+                action = self._decode_model_action(
+                    action_output,
+                    state,
+                    actor_id,
+                    entry["raw_masks"],
+                )
+                self._add_profile_time(rollout, "decode", started)
+
+                started = time.perf_counter()
+                result = environment.step(action)
+                self._add_profile_time(rollout, "env_step", started)
+                episode_steps[env_index] += 1
+                environment_done = environment.is_done()
+                timeout = (
+                    max_episode_steps is not None
+                    and episode_steps[env_index] >= max_episode_steps
+                    and not environment_done
+                )
+                done = environment_done or timeout
+
+                rollout.append(
+                    entry["actor_observation"],
+                    action_output,
+                    result.reward,
+                    done,
+                    entry["masks"],
+                    critic_observation=entry["critic_observation"],
+                    actor_id=actor_id,
+                    team=actor.team,
+                    env_id=env_index,
+                )
+                if environment_done:
+                    winner = environment.get_winner()
+                    rollout.episode_winners.append(winner)
+                    self.record_curriculum_result(winner)
+                    self._reset_environment_for_episode(env_index)
+                    episode_steps[env_index] = 0
+                elif timeout:
+                    rollout.episode_winners.append(None)
+                    rollout.episode_timeouts += 1
+                    self.record_curriculum_result(None)
+                    self._reset_environment_for_episode(env_index)
+                    episode_steps[env_index] = 0
+
+        rollout.last_value = self._bootstrap_value()
+        rollout.last_values_by_env = {
+            env_index: float(self._bootstrap_value_for_environment(environment))
+            for env_index, environment in enumerate(self.environments)
+        }
+        return rollout
+
+    def _prepare_rollout_entries(
+        self,
+        rollout: RolloutBuffer,
+        remaining_steps: int,
+        episode_steps: list[int],
+    ) -> list[dict[str, Any]]:
+        entries: list[dict[str, Any]] = []
+        for env_index, environment in enumerate(self.environments):
+            if len(entries) >= remaining_steps:
+                break
+            if environment.is_done():
+                self._reset_environment_for_episode(env_index)
+                episode_steps[env_index] = 0
+                environment = self.environments[env_index]
+
+            state = environment.combat_state
+            actor_id = self._active_actor_id_for_environment(environment)
             actor = state.character_at(actor_id)
             if actor is None:
                 raise ValueError("environment has no active actor")
 
             policy = self._policy_for_actor(state, actor_id)
+            started = time.perf_counter()
             actor_observation = self._actor_observation(state, actor_id, policy)
             critic_observation = self._critic_observation(state, actor_id, policy)
-            masks = self._padded_masks(build_action_masks(state, actor_id), policy)
+            self._add_profile_time(rollout, "observation", started)
 
-            with torch.no_grad():
-                action_output = self._policy_act(
-                    policy,
-                    actor_observation,
-                    masks,
-                    critic_observation,
-                    state,
-                    actor_id,
-                )
+            started = time.perf_counter()
+            raw_masks = self._build_action_masks(state, actor_id)
+            masks = self._padded_masks(raw_masks, policy)
+            self._add_profile_time(rollout, "mask", started)
 
-            action = self._decode_model_action(action_output, state, actor_id)
-            result = self.environment.step(action)
-            done = self.environment.is_done()
-
-            rollout.append(
-                actor_observation,
-                action_output,
-                result.reward,
-                done,
-                masks,
-                critic_observation=critic_observation,
-                actor_id=actor_id,
-                team=actor.team,
+            entries.append(
+                {
+                    "env_index": env_index,
+                    "state": state,
+                    "actor_id": actor_id,
+                    "actor": actor,
+                    "policy": policy,
+                    "actor_observation": actor_observation,
+                    "critic_observation": critic_observation,
+                    "raw_masks": raw_masks,
+                    "masks": masks,
+                }
             )
-            if done:
-                winner = self.environment.get_winner()
-                rollout.episode_winners.append(winner)
-                self.record_curriculum_result(winner)
-                self._reset_environment_for_episode()
+        return entries
 
-        rollout.last_value = self._bootstrap_value()
-        return rollout
+    def _act_for_rollout_entries(
+        self,
+        entries: list[dict[str, Any]],
+    ) -> list[dict[str, torch.Tensor]]:
+        if not entries:
+            return []
+        if self._can_batch_rollout_entries(entries):
+            policy = entries[0]["policy"]
+            actor_observation = _stack_observations(
+                [entry["actor_observation"] for entry in entries],
+                self.device,
+            )
+            critic_observation = _stack_observations(
+                [entry["critic_observation"] for entry in entries],
+                self.device,
+            )
+            masks = _stack_mask_batch([entry["masks"] for entry in entries], self.device)
+            output = self._policy_act(
+                policy,
+                actor_observation,
+                masks,
+                critic_observation,
+                entries[0]["state"],
+                entries[0]["actor_id"],
+            )
+            return [_select_action_output(output, index) for index in range(len(entries))]
+
+        outputs = []
+        for entry in entries:
+            outputs.append(
+                self._policy_act(
+                    entry["policy"],
+                    entry["actor_observation"],
+                    entry["masks"],
+                    entry["critic_observation"],
+                    entry["state"],
+                    entry["actor_id"],
+                )
+            )
+        return outputs
+
+    def _can_batch_rollout_entries(self, entries: list[dict[str, Any]]) -> bool:
+        if len(entries) <= 1:
+            return False
+        policy = entries[0]["policy"]
+        if not isinstance(policy, (GNNPPOActorCritic, PPOActorCritic)):
+            return False
+        return all(entry["policy"] is policy for entry in entries)
 
     def compute_returns_and_advantages(
         self,
@@ -430,14 +600,61 @@ class PPOTrainer:
         rewards = torch.tensor(rollout.rewards, dtype=torch.float32, device=self.device)
         dones = torch.tensor(rollout.dones, dtype=torch.float32, device=self.device)
         values = torch.stack(rollout.values).to(device=self.device)
+        advantages = torch.zeros_like(rewards)
+        if len(rollout.next_values) == len(rollout):
+            next_values = torch.stack(rollout.next_values).to(device=self.device)
+            env_ids = (
+                rollout.env_ids
+                if len(rollout.env_ids) == len(rollout)
+                else [0 for _ in rollout.rewards]
+            )
+            gae_by_env: dict[int, torch.Tensor] = {}
+            zero = torch.tensor(0.0, device=self.device)
+            for step in reversed(range(len(rollout))):
+                env_id = int(env_ids[step])
+                next_non_terminal = 1.0 - dones[step]
+                delta = (
+                    rewards[step]
+                    + self.config.gamma * next_values[step] * next_non_terminal
+                    - values[step]
+                )
+                gae = gae_by_env.get(env_id, zero)
+                gae = delta + self.config.gamma * self.config.gae_lambda * next_non_terminal * gae
+                advantages[step] = gae
+                gae_by_env[env_id] = gae
+            returns = advantages + values
+            return returns.detach(), advantages.detach()
+
+        if len(rollout.env_ids) == len(rollout) and rollout.last_values_by_env:
+            next_value_by_env = {
+                int(env_id): torch.tensor(value, dtype=torch.float32, device=self.device)
+                for env_id, value in rollout.last_values_by_env.items()
+            }
+            gae_by_env: dict[int, torch.Tensor] = {}
+            zero = torch.tensor(0.0, device=self.device)
+            for step in reversed(range(len(rollout))):
+                env_id = int(rollout.env_ids[step])
+                next_value = next_value_by_env.get(env_id, zero)
+                next_non_terminal = 1.0 - dones[step]
+                delta = (
+                    rewards[step]
+                    + self.config.gamma * next_value * next_non_terminal
+                    - values[step]
+                )
+                gae = gae_by_env.get(env_id, zero)
+                gae = delta + self.config.gamma * self.config.gae_lambda * next_non_terminal * gae
+                advantages[step] = gae
+                gae_by_env[env_id] = gae
+                next_value_by_env[env_id] = values[step]
+            returns = advantages + values
+            return returns.detach(), advantages.detach()
+
         last_value = torch.tensor(
             rollout.last_value,
             dtype=torch.float32,
             device=self.device,
         )
-        advantages = torch.zeros_like(rewards)
         gae = torch.tensor(0.0, device=self.device)
-
         for step in reversed(range(len(rollout))):
             next_value = last_value if step == len(rollout) - 1 else values[step + 1]
             next_non_terminal = 1.0 - dones[step]
@@ -458,6 +675,7 @@ class PPOTrainer:
         if len(rollout) == 0:
             raise ValueError("rollout is empty")
 
+        update_started = time.perf_counter()
         self.model.train()
         data = rollout.to_tensors(self.device)
         returns, advantages = self.compute_returns_and_advantages(rollout)
@@ -534,6 +752,8 @@ class PPOTrainer:
 
         for key in metrics:
             metrics[key] /= max(1, updates)
+        if self.profile_rollout:
+            rollout.profile_times["update"] = time.perf_counter() - update_started
         return metrics
 
     def train_iteration(
@@ -643,24 +863,30 @@ class PPOTrainer:
         }
 
     def _bootstrap_value(self) -> float:
-        if self.environment.is_done():
-            return 0.0
+        return float(self._bootstrap_value_for_environment(self.environment))
 
-        state = self.environment.combat_state
-        actor_id = self._active_actor_id()
+    def _bootstrap_value_for_environment(self, environment: CombatEnvironment) -> torch.Tensor:
+        if environment.is_done():
+            return torch.tensor(0.0)
+
+        state = environment.combat_state
+        actor_id = self._active_actor_id_for_environment(environment)
         with torch.no_grad():
             policy = self._policy_for_actor(state, actor_id)
             actor_observation = self._actor_observation(state, actor_id, policy)
             critic_observation = self._critic_observation(state, actor_id, policy)
             value = self._policy_value(policy, actor_observation, critic_observation).squeeze(0)
-        return float(value.detach().cpu())
+        return value.detach().cpu()
 
-    def _active_actor_id(self) -> int:
-        state = self.environment.combat_state
+    def _active_actor_id_for_environment(self, environment: CombatEnvironment) -> int:
+        state = environment.combat_state
         actor_id = state.active_actor_id
         if actor_id is None:
             raise ValueError("environment has no characters")
         return actor_id
+
+    def _active_actor_id(self) -> int:
+        return self._active_actor_id_for_environment(self.environment)
 
     def policy_for_actor(self, actor_id: int) -> Any:
         """Return the policy configured for an actor in the current environment."""
@@ -675,13 +901,13 @@ class PPOTrainer:
 
     def _actor_observation(self, state: Any, actor_id: int, policy: Any | None = None) -> Any:
         if self._uses_entity_observation(policy):
-            return encode_entity_observation(state, actor_id)
-        return encode_observation(state, actor_id).to(self.device)
+            return encode_entity_observation(state, actor_id, fast=self.fast_observation)
+        return encode_observation(state, actor_id, fast=self.fast_observation).to(self.device)
 
     def _critic_observation(self, state: Any, actor_id: int, policy: Any | None = None) -> Any:
         if self._uses_entity_observation(policy):
-            return encode_entity_observation(state, actor_id)
-        return encode_observation(state, actor_id).to(self.device)
+            return encode_entity_observation(state, actor_id, fast=self.fast_observation)
+        return encode_observation(state, actor_id, fast=self.fast_observation).to(self.device)
 
     def _uses_entity_observation(self, policy: Any | None = None) -> bool:
         selected_policy = self.model if policy is None else policy
@@ -811,30 +1037,114 @@ class PPOTrainer:
         action_output: dict[str, torch.Tensor],
         state: Any,
         actor_id: int,
+        masks: dict[str, torch.Tensor] | None = None,
     ) -> Any:
         try:
-            return decode_action(
-                int(action_output["action_category"].item()),
-                int(action_output["main_action_type"].item()),
-                int(action_output["target_index"].item()),
-                int(action_output["move_index"].item()),
-                int(action_output["option_index"].item()),
+            action_category, main_action_type, target_index, move_index, option_index = (
+                torch.stack(
+                    (
+                        action_output["action_category"].reshape(()),
+                        action_output["main_action_type"].reshape(()),
+                        action_output["target_index"].reshape(()),
+                        action_output["move_index"].reshape(()),
+                        action_output["option_index"].reshape(()),
+                    )
+                )
+                .detach()
+                .cpu()
+                .tolist()
+            )
+            decoder = decode_fast_training_action if self.fast_action_masks else decode_action
+            return decoder(
+                int(action_category),
+                int(main_action_type),
+                int(target_index),
+                int(move_index),
+                int(option_index),
                 state,
                 actor_id,
+                masks=masks,
             )
         except ValueError:
             return EndTurnAction(actor_id=actor_id)
 
-    def _reset_environment_for_episode(self) -> None:
+    def _build_action_masks(self, state: Any, actor_id: int) -> dict[str, torch.Tensor]:
+        if self.fast_action_masks:
+            return build_fast_training_action_masks(state, actor_id)
+        return build_action_masks(state, actor_id)
+
+    def _add_profile_time(
+        self,
+        rollout: RolloutBuffer,
+        key: str,
+        started: float,
+    ) -> None:
+        if not self.profile_rollout:
+            return
+        rollout.profile_times[key] = rollout.profile_times.get(key, 0.0) + (
+            time.perf_counter() - started
+        )
+
+    def _initialize_parallel_environments(self) -> None:
+        if self.num_envs <= 1:
+            return
+        if self.encounter_generator is None:
+            self.num_envs = 1
+            return
+        use_initiative = getattr(self.environment, "use_initiative", True)
+        log_to_console = getattr(self.environment, "log_to_console", True)
+        self.environments = [self.environment]
+        for _ in range(self.num_envs - 1):
+            self.environments.append(
+                self._generate_environment_for_episode(
+                    use_initiative=use_initiative,
+                    log_to_console=log_to_console,
+                )
+            )
+
+    def _generate_environment_for_episode(
+        self,
+        *,
+        use_initiative: bool,
+        log_to_console: bool,
+    ) -> CombatEnvironment:
+        if self.encounter_generator is None:
+            raise ValueError("encounter_generator is required for multiple environments")
+        if self.curriculum_config.enabled:
+            self.encounter_generator.set_curriculum_level(self.current_curriculum_level)
+            return self.encounter_generator.generate_curriculum_environment(
+                self.current_curriculum_level,
+                use_initiative=use_initiative,
+                log_to_console=log_to_console,
+            )
+        return self.encounter_generator.generate_environment(
+            use_initiative=use_initiative,
+            log_to_console=log_to_console,
+        )
+
+    def _reset_environment_for_episode(self, env_index: int = 0) -> None:
+        environment = self.environments[env_index]
         if self.curriculum_config.enabled and self.encounter_generator is not None:
             self.encounter_generator.set_curriculum_level(self.current_curriculum_level)
-            self.environment = self.encounter_generator.generate_curriculum_environment(
+            self.environments[env_index] = self.encounter_generator.generate_curriculum_environment(
                 self.current_curriculum_level,
-                use_initiative=getattr(self.environment, "use_initiative", True),
-                log_to_console=getattr(self.environment, "log_to_console", True),
+                use_initiative=getattr(environment, "use_initiative", True),
+                log_to_console=getattr(environment, "log_to_console", True),
             )
+            if env_index == 0:
+                self.environment = self.environments[0]
             return
-        self.environment.reset()
+        if self.encounter_generator is not None and self.num_envs > 1:
+            self.environments[env_index] = self.encounter_generator.generate_environment(
+                use_initiative=getattr(environment, "use_initiative", True),
+                log_to_console=getattr(environment, "log_to_console", True),
+            )
+            if env_index == 0:
+                self.environment = self.environments[0]
+            return
+        environment.reset()
+        if env_index == 0:
+            self.environment = environment
 
     def _resolve_curriculum_config(
         self,
@@ -894,7 +1204,7 @@ class PPOTrainer:
         policy: Any | None = None,
     ) -> dict[str, torch.Tensor]:
         action_space = _policy_action_space(policy or self.model, self.model)
-        return {
+        padded = {
             "action_category": _pad_mask(
                 masks["action_category"],
                 action_space.action_category_count,
@@ -926,6 +1236,15 @@ class PPOTrainer:
                 self.device,
             ),
         }
+        for name, size in action_space.extra_heads.items():
+            padded[name] = _pad_mask(
+                masks.get(name, torch.zeros(0, dtype=torch.bool)),
+                size,
+                name,
+                self.device,
+                default_first=True,
+            )
+        return padded
 
 
 def _pad_mask(
@@ -933,6 +1252,8 @@ def _pad_mask(
     target_size: int,
     name: str,
     device: torch.device,
+    *,
+    default_first: bool = False,
 ) -> torch.Tensor:
     prepared = mask.to(device=device, dtype=torch.bool)
     if prepared.ndim != 1:
@@ -940,6 +1261,10 @@ def _pad_mask(
     if prepared.shape[0] > target_size:
         raise ValueError(f"{name} mask is larger than the model head")
     if prepared.shape[0] == target_size:
+        if prepared.any() or not default_first or target_size <= 0:
+            return prepared
+        prepared = prepared.clone()
+        prepared[0] = True
         return prepared
 
     padding = torch.zeros(
@@ -947,7 +1272,10 @@ def _pad_mask(
         dtype=torch.bool,
         device=device,
     )
-    return torch.cat((prepared, padding), dim=0)
+    padded = torch.cat((prepared, padding), dim=0)
+    if default_first and target_size > 0 and not padded.any():
+        padded[0] = True
+    return padded
 
 
 def _coerce_baseline_policy(value: bool | Any, policy_type: type) -> Any | None:
@@ -969,12 +1297,24 @@ def _policy_action_space(policy: Any, fallback: Any) -> SimpleNamespace:
     )
     if not all(hasattr(source, name) for name in required):
         source = fallback
+    extra_heads = {}
+    for attribute, mask_name in (
+        ("bonus_action_type_count", "bonus_action_type"),
+        ("reaction_type_count", "reaction_type"),
+        ("class_feature_count", "class_feature"),
+        ("spell_count", "spell_index"),
+        ("slot_level_count", "slot_level"),
+        ("item_count", "item_index"),
+    ):
+        if hasattr(source, attribute):
+            extra_heads[mask_name] = int(getattr(source, attribute))
     return SimpleNamespace(
         action_category_count=int(getattr(source, "action_category_count")),
         main_action_type_count=int(getattr(source, "main_action_type_count")),
         target_count=int(getattr(source, "target_count")),
         move_count=int(getattr(source, "move_count")),
         option_count=int(getattr(source, "option_count")),
+        extra_heads=extra_heads,
     )
 
 
@@ -1041,6 +1381,29 @@ def _stack_observations(
     if torch.is_tensor(first):
         return torch.stack(observations).to(device=device)
     raise TypeError(f"unsupported observation type: {type(first)!r}")
+
+
+def _stack_mask_batch(
+    masks: list[dict[str, torch.Tensor]],
+    device: torch.device,
+) -> dict[str, torch.Tensor]:
+    if not masks:
+        raise ValueError("masks are empty")
+    keys = masks[0].keys()
+    return {
+        key: torch.stack([item[key] for item in masks]).to(device=device)
+        for key in keys
+    }
+
+
+def _select_action_output(
+    action_output: dict[str, torch.Tensor],
+    index: int,
+) -> dict[str, torch.Tensor]:
+    selected: dict[str, torch.Tensor] = {}
+    for key, value in action_output.items():
+        selected[key] = value[index] if torch.is_tensor(value) and value.ndim > 0 else value
+    return selected
 
 
 def _select_observation_batch(

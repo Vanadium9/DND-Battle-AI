@@ -221,6 +221,196 @@ def build_action_masks(state: CombatState, actor_id: int) -> dict[str, torch.Ten
     }
 
 
+def build_fast_training_action_masks(state: CombatState, actor_id: int) -> dict[str, torch.Tensor]:
+    """Build a reduced action mask for early PPO training.
+
+    This keeps the GUI/evaluation mask untouched while avoiding expensive checks for
+    spells, items, cover-dependent actions and full-map movement enumeration.
+    """
+
+    actor = state.character_at(actor_id)
+    masks = _empty_masks(state, actor)
+    if actor is None or not actor.can_take_turn or not _is_active_actor(state, actor_id):
+        return masks
+
+    main_action_type_mask = masks["main_action_type"]
+    main_action_type_mask[int(MainActionType.ATTACK)] = _has_fast_weapon_attack_target(
+        state,
+        actor,
+    )
+    main_action_type_mask[int(MainActionType.DASH)] = _can_spend_action(
+        actor,
+        COMMON_ACTION_DASH,
+    )
+
+    target_mask = masks["target_index"]
+    if main_action_type_mask[int(MainActionType.ATTACK)]:
+        for target_id, target in enumerate(state.characters):
+            if _first_fast_weapon_for_target(state, actor, target) is not None:
+                target_mask[target_id] = True
+
+    option_mask = masks["option_index"]
+    if main_action_type_mask[int(MainActionType.ATTACK)]:
+        for weapon_index, weapon in enumerate(actor.weapons):
+            if _fast_weapon_has_target(state, actor, weapon):
+                option_mask[weapon_index] = True
+
+    masks["move_index"] = _build_fast_training_move_mask(state, actor)
+
+    action_category_mask = masks["action_category"]
+    action_category_mask[int(ActionCategory.MAIN_ACTION)] = bool(main_action_type_mask.any())
+    action_category_mask[int(ActionCategory.MOVEMENT)] = bool(masks["move_index"].any())
+    action_category_mask[int(ActionCategory.END_TURN)] = (
+        actor.is_alive and COMMON_ACTION_END_TURN in actor.common_actions
+    )
+    action_category_mask[int(ActionCategory.CLASS_FEATURE)] = _has_fast_class_feature_action(
+        actor,
+    )
+    action_category_mask[int(ActionCategory.BONUS_ACTION)] = _has_fast_bonus_action(actor)
+    return masks
+
+
+def _build_fast_training_move_mask(state: CombatState, actor: Character) -> torch.Tensor:
+    move_mask = torch.zeros(_move_space_size(state), dtype=torch.bool)
+    if (
+        state.grid_map is None
+        or actor.action_economy.movement_remaining <= 0
+        or actor.action_economy.grappled
+        or COMMON_ACTION_MOVE not in actor.common_actions
+    ):
+        return move_mask
+
+    candidates = _fast_training_move_candidates(state, actor)
+    for position in candidates:
+        move_mask[_move_index_from_position(state, position)] = True
+    return move_mask
+
+
+def _fast_training_move_candidates(state: CombatState, actor: Character) -> set[Position]:
+    grid_map = state.grid_map
+    if grid_map is None:
+        return set()
+
+    movement_remaining = actor.action_economy.movement_remaining
+    if actor.prone:
+        movement_remaining -= max(1, max(0, actor.speed) // 2)
+    if movement_remaining <= 0:
+        return set()
+
+    enemies = [
+        character
+        for character in state.characters
+        if character.team is not actor.team and character.is_alive
+    ]
+    candidates: set[Position] = set()
+    for enemy in enemies:
+        candidates.update(_adjacent_positions(enemy.position))
+        candidates.add(_step_toward(actor.position, enemy.position))
+        candidates.add(_step_away(actor.position, enemy.position))
+    candidates.update(_adjacent_positions(actor.position))
+
+    reachable = grid_map.movement_costs_from(
+        actor.position,
+        movement_remaining,
+        state.characters,
+    )
+    valid: set[Position] = set()
+    for position in candidates:
+        if position != actor.position and position in reachable:
+            valid.add(position)
+    return valid
+
+
+def _has_fast_weapon_attack_target(state: CombatState, actor: Character) -> bool:
+    if not _can_spend_action(actor, COMMON_ACTION_ATTACK):
+        return False
+    return any(
+        _first_fast_weapon_for_target(state, actor, target) is not None
+        for target in state.characters
+    )
+
+
+def _first_fast_weapon_for_target(
+    state: CombatState,
+    actor: Character,
+    target: Character,
+) -> WeaponAttack | None:
+    if target.team is actor.team or not target.is_alive:
+        return None
+    for weapon in actor.weapons:
+        if _fast_weapon_can_target(state, actor, target, weapon):
+            return weapon
+    return None
+
+
+def _fast_weapon_has_target(
+    state: CombatState,
+    actor: Character,
+    weapon: WeaponAttack,
+) -> bool:
+    return any(
+        _fast_weapon_can_target(state, actor, target, weapon)
+        for target in state.characters
+    )
+
+
+def _fast_weapon_can_target(
+    state: CombatState,
+    actor: Character,
+    target: Character,
+    weapon: WeaponAttack,
+) -> bool:
+    return (
+        weapon.available
+        and target.team is not actor.team
+        and target.is_alive
+        and _distance(actor.position, target.position, state) <= weapon.range
+    )
+
+
+def _adjacent_positions(position: Position) -> tuple[Position, ...]:
+    return (
+        Position(position.x + 1, position.y),
+        Position(position.x - 1, position.y),
+        Position(position.x, position.y + 1),
+        Position(position.x, position.y - 1),
+    )
+
+
+def _step_toward(start: Position, target: Position) -> Position:
+    dx = _sign(target.x - start.x)
+    dy = _sign(target.y - start.y)
+    if abs(target.x - start.x) >= abs(target.y - start.y):
+        return Position(start.x + dx, start.y)
+    return Position(start.x, start.y + dy)
+
+
+def _step_away(start: Position, target: Position) -> Position:
+    dx = _sign(start.x - target.x)
+    dy = _sign(start.y - target.y)
+    if abs(target.x - start.x) >= abs(target.y - start.y):
+        return Position(start.x + dx, start.y)
+    return Position(start.x, start.y + dy)
+
+
+def _sign(value: int) -> int:
+    return (value > 0) - (value < 0)
+
+
+def _has_fast_bonus_action(actor: Character) -> bool:
+    return (
+        actor.action_economy.bonus_action_available
+        and "second_wind" in implemented_feature_active_actions(actor, "bonus_action")
+    )
+
+
+def _has_fast_class_feature_action(actor: Character) -> bool:
+    return (
+        actor.action_economy.action_available is False
+        and "action_surge" in implemented_feature_active_actions(actor, "action")
+    )
+
+
 def _explain_main_actions(
     state: CombatState,
     actor_id: int,
@@ -437,11 +627,12 @@ def decode_action(
     actor_id: int,
     target_cell_index: int | None = None,
     direction_index: int | None = None,
+    masks: dict[str, torch.Tensor] | None = None,
 ) -> CombatAction:
     """Decode hierarchical PPO outputs into a concrete combat action."""
 
     selected_category = _coerce_action_category(action_category)
-    masks = build_action_masks(state, actor_id)
+    masks = masks or build_action_masks(state, actor_id)
     _validate_masked_index(
         selected_category,
         masks["action_category"],
@@ -664,6 +855,61 @@ def decode_action(
         return ImprovisedAction(actor_id=actor_id)
 
     raise ValueError(f"Main action type {selected_main_action.name} is not implemented")
+
+
+def decode_fast_training_action(
+    action_category: int | ActionCategory,
+    main_action_type: int | MainActionType,
+    target_index: int,
+    move_index: int,
+    option_index: int,
+    state: CombatState,
+    actor_id: int,
+    masks: dict[str, torch.Tensor],
+) -> CombatAction:
+    """Decode the reduced training action space without full-rule rechecks."""
+
+    selected_category = _coerce_action_category(action_category)
+    _validate_masked_index(
+        selected_category,
+        masks["action_category"],
+        "action_category",
+        actor_id,
+    )
+    if selected_category is ActionCategory.MOVEMENT:
+        _validate_masked_index(move_index, masks["move_index"], "move_index", actor_id)
+        return MoveAction(
+            actor_id=actor_id,
+            destination=_position_from_move_index(state, move_index),
+        )
+    if selected_category is ActionCategory.END_TURN:
+        return EndTurnAction(actor_id=actor_id)
+    if selected_category is ActionCategory.BONUS_ACTION:
+        return SecondWindAction(actor_id=actor_id)
+    if selected_category is ActionCategory.CLASS_FEATURE:
+        return ActionSurgeAction(actor_id=actor_id)
+
+    selected_main_action = _coerce_main_action_type(main_action_type)
+    _validate_masked_index(
+        selected_main_action,
+        masks["main_action_type"],
+        "main_action_type",
+        actor_id,
+    )
+    if selected_main_action is MainActionType.DASH:
+        return DashAction(actor_id=actor_id)
+    if selected_main_action is MainActionType.ATTACK:
+        _validate_masked_index(target_index, masks["target_index"], "target_index", actor_id)
+        _validate_masked_index(option_index, masks["option_index"], "option_index", actor_id)
+        actor = state.character_at(actor_id)
+        if actor is None or option_index >= len(actor.weapons):
+            raise ValueError(f"option_index {option_index} has no valid weapon for actor {actor_id}")
+        return AttackAction(
+            actor_id=actor_id,
+            target_id=target_index,
+            weapon=actor.weapons[option_index],
+        )
+    raise ValueError(f"Main action type {selected_main_action.name} is masked for fast training")
 
 
 def _empty_masks(

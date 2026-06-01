@@ -7,7 +7,9 @@ from agents.action_space import (
     ActionCategory,
     MainActionType,
     build_action_masks,
+    build_fast_training_action_masks,
     decode_action,
+    decode_fast_training_action,
     explain_action_mask,
 )
 from agents.base import BaseAgent
@@ -175,8 +177,10 @@ __all__ = [
     "actor_features_to_entity_node",
     "build_edge_features",
     "build_action_masks",
+    "build_fast_training_action_masks",
     "encode_entity_observation",
     "decode_action",
+    "decode_fast_training_action",
     "encode_observation",
     "flatten_entity_observation",
     "explain_action_mask",

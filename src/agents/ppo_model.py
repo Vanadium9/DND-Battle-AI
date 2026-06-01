@@ -267,22 +267,27 @@ class PPOActorCritic(nn.Module):
 
         return {
             "action_category": Categorical(
-                logits=_mask_logits(outputs["action_category_logits"], action_category_mask)
+                logits=_mask_logits(outputs["action_category_logits"], action_category_mask),
+                validate_args=False,
             ),
             "main_action_type": Categorical(
                 logits=_mask_logits(
                     outputs["main_action_type_logits"],
                     main_action_type_mask,
-                )
+                ),
+                validate_args=False,
             ),
             "target_index": Categorical(
-                logits=_mask_logits(outputs["target_logits"], target_mask)
+                logits=_mask_logits(outputs["target_logits"], target_mask),
+                validate_args=False,
             ),
             "move_index": Categorical(
-                logits=_mask_logits(outputs["move_logits"], move_mask)
+                logits=_mask_logits(outputs["move_logits"], move_mask),
+                validate_args=False,
             ),
             "option_index": Categorical(
-                logits=_mask_logits(outputs["option_logits"], option_mask)
+                logits=_mask_logits(outputs["option_logits"], option_mask),
+                validate_args=False,
             ),
             "masks": {
                 "action_category": action_category_mask,

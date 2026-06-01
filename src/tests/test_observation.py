@@ -374,6 +374,31 @@ def test_entity_observation_map_features_have_stable_size() -> None:
     assert torch.count_nonzero(observation.map_features[:, -4]) >= 2
 
 
+def test_fast_observation_keeps_model_compatible_shapes() -> None:
+    state = CombatState(
+        characters=[
+            FighterArcher(Position(0, 0)),
+            WizardEvoker(Position(0, 2)),
+            Goblin(Position(3, 0)),
+            Orc(Position(5, 5)),
+        ],
+        grid_map=GridMap(width=8, height=8),
+    )
+
+    full = encode_entity_observation(state, actor_id=0)
+    fast = encode_entity_observation(state, actor_id=0, fast=True)
+    full_flat = encode_observation(state, actor_id=0)
+    fast_flat = encode_observation(state, actor_id=0, fast=True)
+
+    assert fast.actor_features.shape == full.actor_features.shape
+    assert fast.entities_features.shape == full.entities_features.shape
+    assert fast.map_features.shape == full.map_features.shape
+    assert fast.global_features.shape == full.global_features.shape
+    assert fast.entity_mask.shape == full.entity_mask.shape
+    assert fast_flat.shape == full_flat.shape
+    assert fast_flat.shape == (OBSERVATION_SIZE,)
+
+
 def test_flatten_entity_observation_is_mlp_compatible() -> None:
     state = CombatState(
         characters=[

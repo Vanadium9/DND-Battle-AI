@@ -3,6 +3,7 @@ from combat import (
     AttackAction,
     Character,
     CombatState,
+    CoverType,
     GridMap,
     MoveAction,
     Position,
@@ -96,6 +97,18 @@ def test_low_cover_does_not_block_line_of_sight() -> None:
     )
 
     assert grid_map.line_of_sight(Position(0, 0), Position(2, 0))
+
+
+def test_grid_map_reuses_los_cover_and_neighbor_caches() -> None:
+    grid_map = GridMap(width=3, height=3)
+
+    assert grid_map.line_of_sight(Position(0, 0), Position(2, 2))
+    assert grid_map.get_cover_between(Position(0, 0), Position(2, 2)) is CoverType.NO_COVER
+    assert grid_map.neighbor_costs(Position(1, 1))
+
+    assert (0, 0, 2, 2) in grid_map._line_of_sight_cache
+    assert (0, 0, 2, 2) in grid_map._cover_cache
+    assert (1, 1) in grid_map._neighbor_cost_cache
 
 
 def test_full_cover_blocks_ranged_attack() -> None:

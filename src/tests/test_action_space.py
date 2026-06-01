@@ -7,13 +7,16 @@ from agents import (
     ActionCategory,
     MainActionType,
     build_action_masks,
+    build_fast_training_action_masks,
     decode_action,
+    decode_fast_training_action,
     explain_action_mask,
 )
 from combat import (
     ActionSurgeAction,
     AttackAction,
     CombatState,
+    DashAction,
     EndTurnAction,
     FighterArcher,
     FighterChampionGreatsword,
@@ -97,6 +100,63 @@ def test_build_action_masks_for_active_actor() -> None:
     assert masks["move_index"][move_index(Position(0, 1))]
     assert masks["move_index"][move_index(Position(3, 0))]
     assert not masks["move_index"][move_index(Position(7, 7))]
+
+
+def test_build_fast_training_action_masks_reduces_common_action_space() -> None:
+    state = make_state()
+
+    masks = build_fast_training_action_masks(state, actor_id=0)
+
+    assert masks["action_category"][ActionCategory.MAIN_ACTION]
+    assert masks["action_category"][ActionCategory.MOVEMENT]
+    assert masks["action_category"][ActionCategory.END_TURN]
+    assert masks["main_action_type"][MainActionType.ATTACK]
+    assert masks["main_action_type"][MainActionType.DASH]
+    assert not masks["main_action_type"][MainActionType.READY]
+    assert not masks["main_action_type"][MainActionType.SEARCH]
+    assert not masks["main_action_type"][MainActionType.IMPROVISED]
+    assert masks["target_index"][2]
+
+
+def test_decode_fast_training_action_handles_reduced_space() -> None:
+    state = make_state()
+    masks = build_fast_training_action_masks(state, actor_id=0)
+
+    attack = decode_fast_training_action(
+        ActionCategory.MAIN_ACTION,
+        MainActionType.ATTACK,
+        target_index=2,
+        move_index=0,
+        option_index=0,
+        state=state,
+        actor_id=0,
+        masks=masks,
+    )
+    move = decode_fast_training_action(
+        ActionCategory.MOVEMENT,
+        MainActionType.ATTACK,
+        target_index=0,
+        move_index=move_index(Position(0, 1)),
+        option_index=0,
+        state=state,
+        actor_id=0,
+        masks=masks,
+    )
+    dash = decode_fast_training_action(
+        ActionCategory.MAIN_ACTION,
+        MainActionType.DASH,
+        target_index=0,
+        move_index=0,
+        option_index=0,
+        state=state,
+        actor_id=0,
+        masks=masks,
+    )
+
+    assert isinstance(attack, AttackAction)
+    assert attack.target_id == 2
+    assert isinstance(move, MoveAction)
+    assert isinstance(dash, DashAction)
 
 
 def test_build_action_masks_respect_action_economy() -> None:
