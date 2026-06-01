@@ -1,0 +1,12 @@
+{
+  "checkpoint_path": "checkpoints/gnn_ppo_actor_critic.pt",
+  "model_type": "gnn",
+  "fallback_agent": "rule_based",
+  "animation_speed": 600,
+  "animations_enabled": true,
+  "autobattle_delay": 600,
+  "character_dir": "data/characters",
+  "replay_dir": "replays",
+  "map_dir": "maps",
+  "random_battle_seed": null
+}

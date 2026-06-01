@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QPoint, QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -18,17 +19,23 @@ from PySide6.QtWidgets import QWidget
 
 from agents import build_action_masks
 from combat import CombatEnvironment, Position, Team, TerrainType
+from ui.animations import BattleAnimation, BattleAnimationFrame, BattleAnimationKind
 
 
 class BattleMapWidget(QWidget):
     """Draw a grid map, terrain, action highlights and creature tokens."""
 
     creature_selected = Signal(int)
+    cell_clicked = Signal(object)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._environment: CombatEnvironment | None = None
         self._selected_creature_id: int | None = None
+        self._animation_frame = BattleAnimationFrame()
+        self._manual_click_mode = False
+        self._manual_movement_highlights: set[Position] | None = None
+        self._manual_target_highlights: set[Position] | None = None
         self.setMinimumSize(420, 320)
         self.setMouseTracking(True)
 
@@ -43,6 +50,27 @@ class BattleMapWidget(QWidget):
     def selected_creature_id(self) -> int | None:
         return self._selected_creature_id
 
+    def set_animation_frame(self, frame: BattleAnimationFrame) -> None:
+        self._animation_frame = frame
+        self.update()
+
+    def clear_animation(self) -> None:
+        self._animation_frame = BattleAnimationFrame()
+        self.update()
+
+    def set_manual_click_mode(self, enabled: bool) -> None:
+        self._manual_click_mode = bool(enabled)
+
+    def set_manual_highlights(
+        self,
+        *,
+        movement: set[Position] | tuple[Position, ...] | None = None,
+        targets: set[Position] | tuple[Position, ...] | None = None,
+    ) -> None:
+        self._manual_movement_highlights = None if movement is None else set(movement)
+        self._manual_target_highlights = None if targets is None else set(targets)
+        self.update()
+
     def sizeHint(self) -> QSize:
         return QSize(640, 440)
 
@@ -51,6 +79,9 @@ class BattleMapWidget(QWidget):
             return
         position = self._cell_at_point(event.position().toPoint())
         if position is None:
+            return
+        if self._manual_click_mode:
+            self.cell_clicked.emit(position)
             return
         for creature_id, creature in enumerate(self._environment.combat_state.characters):
             if creature.position == position:
@@ -70,7 +101,9 @@ class BattleMapWidget(QWidget):
 
         self._paint_grid(painter)
         self._paint_highlights(painter)
+        self._paint_animation_areas(painter)
         self._paint_tokens(painter)
+        self._paint_animation_overlays(painter)
 
     def _paint_grid(self, painter: QPainter) -> None:
         state = self._environment.combat_state
@@ -81,7 +114,7 @@ class BattleMapWidget(QWidget):
             for x in range(grid_map.width):
                 position = Position(x, y)
                 cell_rect = self._cell_rect(position)
-                painter.fillRect(cell_rect, _terrain_color(grid_map.terrain_at(position)))
+                painter.fillRect(cell_rect, terrain_qcolor(grid_map.terrain_at(position)))
                 painter.setPen(QPen(QColor("#8fa2ad"), 1))
                 painter.drawRect(cell_rect)
 
@@ -92,16 +125,24 @@ class BattleMapWidget(QWidget):
         for position in targets:
             painter.fillRect(self._cell_rect(position), QColor(220, 53, 69, 86))
 
+    def _paint_animation_areas(self, painter: QPainter) -> None:
+        progress = self._animation_progress()
+        for animation in self._animation_frame.animations:
+            if animation.kind is not BattleAnimationKind.SPELL:
+                continue
+            color = QColor(animation.color)
+            color.setAlpha(max(24, int(116 * (1.0 - progress * 0.35))))
+            for position in animation.cells:
+                painter.fillRect(self._cell_rect(position), color)
+
     def _paint_tokens(self, painter: QPainter) -> None:
         state = self._environment.combat_state
         active_actor_id = state.active_actor_id
         for creature_id, creature in enumerate(state.characters):
             cell_rect = self._cell_rect(creature.position)
-            token_rect = cell_rect.adjusted(
-                cell_rect.width() * 0.17,
-                cell_rect.height() * 0.16,
-                -cell_rect.width() * 0.17,
-                -cell_rect.height() * 0.22,
+            token_rect = self._animated_token_rect(
+                creature_id,
+                self._token_rect(creature.position),
             )
             color = _token_color(creature_id, creature.team, creature.is_alive)
             painter.setBrush(color)
@@ -132,7 +173,66 @@ class BattleMapWidget(QWidget):
                 painter.drawLine(token_rect.topLeft(), token_rect.bottomRight())
                 painter.drawLine(token_rect.bottomLeft(), token_rect.topRight())
 
+            self._paint_token_flash(painter, creature_id, token_rect)
             self._paint_hp_label(painter, creature.hp, creature.max_hp, cell_rect)
+
+    def _paint_animation_overlays(self, painter: QPainter) -> None:
+        progress = self._animation_progress()
+        for animation in self._animation_frame.animations:
+            if animation.kind is BattleAnimationKind.RANGED_ATTACK:
+                self._paint_projectile(painter, animation, progress)
+            elif animation.kind is BattleAnimationKind.DEATH:
+                for target_id in animation.target_ids:
+                    creature = self._environment.combat_state.character_at(target_id)
+                    if creature is None:
+                        continue
+                    token_rect = self._token_rect(creature.position)
+                    painter.setPen(
+                        QPen(QColor("#111827"), max(3, int(token_rect.width() * 0.1)))
+                    )
+                    painter.drawLine(token_rect.topLeft(), token_rect.bottomRight())
+                    painter.drawLine(token_rect.bottomLeft(), token_rect.topRight())
+
+    def _paint_projectile(
+        self,
+        painter: QPainter,
+        animation: BattleAnimation,
+        progress: float,
+    ) -> None:
+        if animation.start is None or animation.end is None:
+            return
+        start = self._cell_rect(animation.start).center()
+        end = self._cell_rect(animation.end).center()
+        current = _interpolate_point(start, end, _ease(progress))
+        color = QColor(animation.color)
+        painter.setPen(QPen(color, 3))
+        painter.drawLine(start, current)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(color)
+        radius = max(3.0, self._cell_rect(animation.start).width() * 0.08)
+        painter.drawEllipse(current, radius, radius)
+
+    def _paint_token_flash(
+        self,
+        painter: QPainter,
+        creature_id: int,
+        token_rect: QRectF,
+    ) -> None:
+        progress = self._animation_progress()
+        for animation in self._animation_frame.animations:
+            if creature_id not in animation.target_ids:
+                continue
+            if animation.kind not in {
+                BattleAnimationKind.DAMAGE,
+                BattleAnimationKind.HEALING,
+                BattleAnimationKind.DEATH,
+            }:
+                continue
+            color = QColor(animation.color)
+            color.setAlpha(max(0, int(165 * (1.0 - progress))))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(color)
+            painter.drawEllipse(token_rect.adjusted(-2, -2, 2, 2))
 
     def _paint_hp_label(
         self,
@@ -158,6 +258,11 @@ class BattleMapWidget(QWidget):
         painter.drawText(label_rect, Qt.AlignmentFlag.AlignCenter, hp_text)
 
     def _highlight_positions(self) -> tuple[set[Position], set[Position]]:
+        if self._manual_movement_highlights is not None or self._manual_target_highlights is not None:
+            return (
+                set(self._manual_movement_highlights or set()),
+                set(self._manual_target_highlights or set()),
+            )
         state = self._environment.combat_state
         grid_map = state.grid_map
         actor_id = state.active_actor_id
@@ -206,6 +311,40 @@ class BattleMapWidget(QWidget):
             cell_size,
         )
 
+    def _token_rect(self, position: Position) -> QRectF:
+        cell_rect = self._cell_rect(position)
+        return cell_rect.adjusted(
+            cell_rect.width() * 0.17,
+            cell_rect.height() * 0.16,
+            -cell_rect.width() * 0.17,
+            -cell_rect.height() * 0.22,
+        )
+
+    def _animated_token_rect(self, creature_id: int, token_rect: QRectF) -> QRectF:
+        progress = self._animation_progress()
+        for animation in self._animation_frame.animations:
+            if animation.actor_id != creature_id:
+                continue
+            if animation.kind is BattleAnimationKind.MOVEMENT:
+                if animation.start is None or animation.end is None:
+                    continue
+                start_rect = self._token_rect(animation.start)
+                end_rect = self._token_rect(animation.end)
+                return _interpolate_rect(start_rect, end_rect, _ease(progress))
+            if animation.kind is BattleAnimationKind.MELEE_ATTACK:
+                if animation.start is None or animation.end is None:
+                    continue
+                start = self._cell_rect(animation.start).center()
+                end = self._cell_rect(animation.end).center()
+                lunge = math.sin(progress * math.pi) * 0.28
+                dx = (end.x() - start.x()) * lunge
+                dy = (end.y() - start.y()) * lunge
+                return token_rect.translated(dx, dy)
+        return token_rect
+
+    def _animation_progress(self) -> float:
+        return max(0.0, min(1.0, float(self._animation_frame.progress)))
+
     def _board_geometry(self) -> tuple[QRectF, float]:
         grid_map = self._environment.combat_state.grid_map
         width = max(1, grid_map.width)
@@ -227,7 +366,9 @@ class BattleMapWidget(QWidget):
         )
 
 
-def _terrain_color(terrain: TerrainType) -> QColor:
+def terrain_qcolor(terrain: TerrainType) -> QColor:
+    """Return the shared GUI color for a terrain type."""
+
     return {
         TerrainType.NORMAL: QColor("#b7e68a"),
         TerrainType.BLOCKED: QColor("#8b5a2b"),
@@ -265,3 +406,21 @@ def _initials(name: str) -> str:
     if len(parts) == 1:
         return parts[0][:2].upper()
     return "".join(part[0].upper() for part in parts[:2])
+
+
+def _ease(progress: float) -> float:
+    progress = max(0.0, min(1.0, progress))
+    return 1.0 - (1.0 - progress) * (1.0 - progress)
+
+
+def _interpolate_point(start: QPointF, end: QPointF, progress: float) -> QPointF:
+    return QPointF(
+        start.x() + (end.x() - start.x()) * progress,
+        start.y() + (end.y() - start.y()) * progress,
+    )
+
+
+def _interpolate_rect(start: QRectF, end: QRectF, progress: float) -> QRectF:
+    top_left = _interpolate_point(start.topLeft(), end.topLeft(), progress)
+    bottom_right = _interpolate_point(start.bottomRight(), end.bottomRight(), progress)
+    return QRectF(top_left, bottom_right)

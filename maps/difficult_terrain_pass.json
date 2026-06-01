@@ -1,0 +1,16 @@
+{
+  "name": "difficult_terrain_pass",
+  "width": 8,
+  "height": 5,
+  "terrain_grid": [
+    ["NORMAL", "NORMAL", "DIFFICULT_TERRAIN", "DIFFICULT_TERRAIN", "DIFFICULT_TERRAIN", "NORMAL", "NORMAL", "NORMAL"],
+    ["NORMAL", "NORMAL", "DIFFICULT_TERRAIN", "DIFFICULT_TERRAIN", "DIFFICULT_TERRAIN", "NORMAL", "NORMAL", "NORMAL"],
+    ["NORMAL", "NORMAL", "DIFFICULT_TERRAIN", "DIFFICULT_TERRAIN", "DIFFICULT_TERRAIN", "NORMAL", "NORMAL", "NORMAL"],
+    ["NORMAL", "NORMAL", "DIFFICULT_TERRAIN", "DIFFICULT_TERRAIN", "DIFFICULT_TERRAIN", "NORMAL", "NORMAL", "NORMAL"],
+    ["NORMAL", "NORMAL", "DIFFICULT_TERRAIN", "DIFFICULT_TERRAIN", "DIFFICULT_TERRAIN", "NORMAL", "NORMAL", "NORMAL"]
+  ],
+  "spawn_zones": {
+    "players": [[0, 1], [0, 2], [0, 3], [1, 2]],
+    "enemies": [[7, 1], [7, 2], [7, 3], [6, 2]]
+  }
+}

@@ -15,29 +15,43 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from agents import PPOActorCritic
+from agents import GNNPPOActorCritic, PPOActorCritic
 from combat import EncounterGenerator, Team
 from configs import PPOConfig
 from training import EpisodeStats, PPOTrainer
 
 
 LOG_INTERVAL = 10
-DEFAULT_CHECKPOINT = PROJECT_ROOT / "checkpoints" / "ppo_actor_critic.pt"
+DEFAULT_MLP_CHECKPOINT = PROJECT_ROOT / "checkpoints" / "ppo_actor_critic.pt"
+DEFAULT_GNN_CHECKPOINT = PROJECT_ROOT / "checkpoints" / "gnn_ppo_actor_critic.pt"
 
 
 def main() -> None:
     args = parse_args()
     seed_everything(args.seed)
+    device = resolve_device(args.device)
 
-    checkpoint_path = Path(args.checkpoint)
+    checkpoint_path = Path(args.checkpoint or default_checkpoint_for_model(args.model_type))
     if not checkpoint_path.is_absolute():
         checkpoint_path = PROJECT_ROOT / checkpoint_path
 
     generator = EncounterGenerator(seed=args.seed)
     environment = generator.generate_environment(log_to_console=False)
-    model = PPOActorCritic(target_count=6, move_count=64)
-    config = PPOConfig(checkpoint_dir=str(checkpoint_path.parent))
-    trainer = PPOTrainer(environment=environment, model=model, config=config)
+    model = build_model(args.model_type)
+    config = PPOConfig(
+        checkpoint_dir=str(checkpoint_path.parent),
+        model_type=args.model_type,
+    )
+    trainer = PPOTrainer(
+        environment=environment,
+        model=model,
+        config=config,
+        device=device,
+    )
+    print(
+        f"training model_type={args.model_type} device={trainer.device} checkpoint={checkpoint_path}",
+        flush=True,
+    )
 
     recent_stats: list[EpisodeStats] = []
     last_checkpoint = checkpoint_path
@@ -77,18 +91,59 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--checkpoint",
         type=str,
-        default=str(DEFAULT_CHECKPOINT),
-        help="Checkpoint file path.",
+        default=None,
+        help=(
+            "Checkpoint file path. Defaults to checkpoints/ppo_actor_critic.pt for "
+            "MLP and checkpoints/gnn_ppo_actor_critic.pt for GNN."
+        ),
+    )
+    parser.add_argument(
+        "--model-type",
+        choices=("mlp", "gnn"),
+        default="gnn",
+        help="Policy architecture to train.",
+    )
+    parser.add_argument(
+        "--device",
+        choices=("auto", "cpu", "cuda"),
+        default="auto",
+        help="Training device. auto uses CUDA when PyTorch can see it.",
     )
     args = parser.parse_args()
     if args.episodes <= 0:
         parser.error("--episodes must be greater than zero")
+    if args.device == "cuda" and not torch.cuda.is_available():
+        parser.error("--device cuda was requested, but torch.cuda.is_available() is False")
     return args
 
 
 def seed_everything(seed: int) -> None:
     random.seed(seed)
     torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def resolve_device(device_name: str) -> torch.device:
+    """Resolve CLI device choice into a torch device."""
+
+    if device_name == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    return torch.device(device_name)
+
+
+def default_checkpoint_for_model(model_type: str) -> Path:
+    """Return the conventional checkpoint path for the selected model."""
+
+    return DEFAULT_GNN_CHECKPOINT if model_type == "gnn" else DEFAULT_MLP_CHECKPOINT
+
+
+def build_model(model_type: str) -> torch.nn.Module:
+    """Create the trainable policy model selected by CLI."""
+
+    if model_type == "gnn":
+        return GNNPPOActorCritic()
+    return PPOActorCritic(target_count=6, move_count=64)
 
 
 def format_report(

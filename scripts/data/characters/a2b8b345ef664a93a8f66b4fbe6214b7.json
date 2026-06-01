@@ -1,0 +1,83 @@
+{
+  "id": "a2b8b345ef664a93a8f66b4fbe6214b7",
+  "name": "Arthas",
+  "class_name": "Fighter",
+  "subclass_name": null,
+  "level": 1,
+  "experience": 0,
+  "race_name": "Human",
+  "role": "MELEE_DAMAGE",
+  "stats": {
+    "str": 19,
+    "dex": 15,
+    "con": 15,
+    "int": 18,
+    "wis": 10,
+    "cha": 15
+  },
+  "hp": 12,
+  "ac": 16,
+  "speed": 30,
+  "proficiency_bonus": 2,
+  "weapons": [
+    {
+      "name": "Greatsword",
+      "range": 1,
+      "damage": "2d6",
+      "damage_type": "slashing"
+    }
+  ],
+  "armor": {
+    "name": "Chain Mail",
+    "base_ac": 16,
+    "dex_cap": 0
+  },
+  "class_features": [
+    "Fighting Style",
+    "Second Wind"
+  ],
+  "subclass_features": [],
+  "race_traits": {
+    "ability_score_bonuses": {
+      "str": 1,
+      "dex": 1,
+      "con": 1,
+      "int": 1,
+      "wis": 1,
+      "cha": 1
+    },
+    "size": "Medium",
+    "speed": 3,
+    "darkvision_range": null,
+    "skill_proficiencies": [],
+    "weapon_proficiencies": [],
+    "saving_throw_advantages": [],
+    "damage_resistances": [],
+    "special_traits": [],
+    "fighting_style": "Great Weapon Fighting"
+  },
+  "feats": [],
+  "spells": [],
+  "prepared_spells": [],
+  "spell_slots": {},
+  "spell_save_dc": 0,
+  "spell_attack_bonus": 0,
+  "resources": {
+    "second_wind": 1
+  },
+  "inventory": [
+    {
+      "name": "Potion of Healing",
+      "item_type": "potion",
+      "quantity": 2,
+      "action_cost": "action",
+      "target_type": "self",
+      "range": 0,
+      "consumable": true,
+      "implemented": true
+    }
+  ],
+  "resistances": [],
+  "immunities": [],
+  "vulnerabilities": []
+}

@@ -47,17 +47,33 @@ class StatEditor(QWidget):
     def set_stats(self, stats: dict[str, int]) -> None:
         """Replace visible ability scores."""
 
+        changed = False
         for ability, spin_box in self._spin_boxes.items():
-            spin_box.setValue(int(stats.get(ability, 10)))
+            value = int(stats.get(ability, 10))
+            if spin_box.value() == value:
+                continue
+            was_blocked = spin_box.blockSignals(True)
+            spin_box.setValue(value)
+            spin_box.blockSignals(was_blocked)
+            changed = True
+        if changed:
+            self.stats_changed.emit()
 
     def apply_bonuses(self, bonuses: dict[str, int]) -> None:
         """Apply racial/ASI bonuses to the visible scores."""
 
+        changed = False
         for ability, bonus in bonuses.items():
             spin_box = self._spin_boxes.get(ability)
             if spin_box is None:
                 continue
-            spin_box.setValue(spin_box.value() + int(bonus))
+            value = spin_box.value() + int(bonus)
+            was_blocked = spin_box.blockSignals(True)
+            spin_box.setValue(value)
+            spin_box.blockSignals(was_blocked)
+            changed = True
+        if changed:
+            self.stats_changed.emit()
 
     def _build_layout(self) -> None:
         root = QVBoxLayout(self)
@@ -71,7 +87,7 @@ class StatEditor(QWidget):
             label_widget = QLabel(label)
             spin_box = QSpinBox()
             spin_box.setRange(1, 30)
-            spin_box.valueChanged.connect(self.stats_changed.emit)
+            spin_box.valueChanged.connect(lambda _value: self.stats_changed.emit())
             self._spin_boxes[ability] = spin_box
             grid.addWidget(label_widget, 0, column)
             grid.addWidget(spin_box, 1, column)

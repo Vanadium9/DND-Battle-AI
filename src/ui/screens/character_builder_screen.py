@@ -193,7 +193,7 @@ class CharacterBuilderScreen(QWidget):
 
         try:
             character = build_internal_character_from_builder(self._collect_data())
-            self.repository.validate_character(character)
+            self.repository.validate_character(_character_for_preview_validation(character))
             errors: list[str] = []
         except (CharacterValidationError, ValueError) as exc:
             character = None
@@ -447,7 +447,7 @@ class CharacterBuilderScreen(QWidget):
             character = build_internal_character_from_builder(self._collect_data())
             self.repository.save_character(character)
         except (CharacterValidationError, ValueError) as exc:
-            QMessageBox.warning(self, "Персонаж не сохранён", "\n".join(_error_lines(exc)))
+            QMessageBox.warning(self, "Невалидный персонаж", "\n".join(_error_lines(exc)))
             self.update_review()
             return
         self.saved.emit()
@@ -711,6 +711,12 @@ def _error_lines(error: Exception) -> list[str]:
     if isinstance(error, CharacterValidationError):
         return [f"{issue.field}: {issue.message}" for issue in error.issues]
     return [str(error)]
+
+
+def _character_for_preview_validation(character: InternalCharacter) -> InternalCharacter:
+    if character.id:
+        return character
+    return character.with_id("preview-character")
 
 
 def _key(value: object) -> str:

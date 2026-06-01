@@ -1,179 +1,26 @@
-# D&D Tactical Combat RL Simulator
+# D&D Battle AI
 
-Python 3.11+ проект для экспериментов с reinforcement learning в небольшом
-D&D-like симуляторе тактического боя.
+Python-проект для D&D-like 5e tactical combat simulator с RL/PPO/GNN-инфраструктурой и desktop GUI на PySide6.
 
-Сейчас проект включает grid-based симулятор боя, общие D&D боевые действия,
-action economy, fixed-vector observations, иерархические PPO action masks,
-PyTorch actor-critic модель, PPO trainer, demo scripts и pytest-покрытие
-ключевого поведения.
+Цель проекта - корректная работа боевого AI в пошаговых тактических боях, а не полная цифровая копия D&D. Правила реализуют ограниченное подмножество D&D-like 5e: уровни 1-5, классы Fighter/Cleric/Wizard, базовые расы, common combat actions, карты, spellcasting, ресурсы, предметы, реплеи и evaluation/training scripts.
 
-## Структура проекта
+## Структура
 
 ```text
 src/
-  agents/      observation encoder, action space, PPO model
-  combat/      combat models, actions, rewards, encounters
-  configs/     training/config objects
-  rules/       ruleset registry and supported content policy
-  tests/       pytest suite
-  training/    PPO rollout and training logic
-  ui/          PySide6 desktop GUI layer
-configs/
-  ruleset_srd5e_minimal.yaml
-scripts/
-  run_demo.py
-  run_gui.py
-  train_ppo.py
-checkpoints/
-requirements.txt
-README.md
-ROADMAP.md
+  agents/      observation encoders, action space, PPO/GNN models, baselines
+  combat/      combat engine, actions, maps, rewards, replay, presets
+  rules/       ruleset registry, classes, races, feats, progression
+  training/    PPO, multi-agent, curriculum, self-play
+  ui/          PySide6 desktop GUI
+configs/       ruleset and training configs
+data/
+  characters/  saved GUI characters
+maps/          JSON map configs
+replays/       saved battle replays
+checkpoints/   trained model checkpoints
+scripts/       CLI entry points
 ```
-
-## Ruleset Registry
-
-Проект реализует ограниченное подмножество D&D-like 5e. Цель проекта —
-корректная работа боевого AI в тактическом симуляторе, а не полная цифровая
-копия D&D.
-
-Активный ruleset зафиксирован как `srd5e_minimal_2014` в
-`configs/ruleset_srd5e_minimal.yaml`. Код registry находится в
-`src/rules/registry.py` и `src/rules/ruleset.py`.
-
-Поддерживаемая поверхность:
-
-- уровни 1-5
-- классы: Fighter, Cleric, Wizard
-- подклассы: Fighter Champion, Cleric Life Domain, Wizard School of Evocation
-- расы: Human, Dwarf, Elf, Halfling
-- common actions: Attack, CastSpell, Dash, Disengage, Dodge, Help, Hide,
-  Search, UseObject, Ready, Grapple, Shove, Stabilize, EndTurn
-- уровни заклинаний 0-3
-
-Для проверок доступны `is_supported_content(content_type, name)` и
-`get_unsupported_reason(content_type, name)`. Неподдерживаемые классы должны
-отклоняться при импорте, неподдерживаемые заклинания помечаются недоступными,
-неподдерживаемые features сохраняются как notes и не используются в бою, а
-неподдерживаемые расы могут перейти в `CustomRace` только после подтверждения
-пользователя.
-
-## Общие D&D Боевые Действия
-
-Общие боевые действия реализованы отдельно от классов персонажей в
-`src/combat/common_actions.py`.
-
-Сейчас реализованы:
-
-- `AttackAction`
-- `CastSpellAction`
-- `DashAction`
-- `DisengageAction`
-- `DodgeAction`
-- `HelpAction`
-- `HideAction`
-- `SearchAction`
-- `UseObjectAction`
-- `ReadyAction`
-- `GrappleAction`
-- `ShoveAction`
-- `StabilizeAction`
-- `ImprovisedAction`
-- `OpportunityAttackAction`
-- `EndTurnAction`
-
-Оружейные атаки принадлежат существам через список `weapons`. Они не являются
-классовыми способностями. Эффективность атаки зависит от характеристик,
-proficiency bonus, настроек оружия и attack bonus.
-
-## Action Economy
-
-Каждое существо хранит ресурсы хода в `src/combat/action_economy.py`:
-
-- `action_available`
-- `bonus_action_available`
-- `reaction_available`
-- `movement_remaining`
-- `free_object_interaction_available`
-
-Основные действия, такие как Attack, Dash, Dodge, Help, Hide, Search, Ready,
-Use Object, Grapple, Shove, Stabilize и Improvised Action, тратят
-`action_available`. Движение тратит `movement_remaining`. Реакции тратят
-`reaction_available`.
-
-Combat state также хранит временные D&D-like состояния: prone, grappled, hidden,
-dodging, disengaged, helped targets, prepared actions и использование реакции.
-
-## Классы, Features И Resources
-
-Классы персонажей сейчас моделируются как metadata плюс definitions для
-features/resources. Классы добавляют `class_features` и `resources`, но не
-владеют общей логикой Attack, Dash, Dodge, Help, Grapple, Shove и других common
-actions.
-
-Например, fighter presets могут иметь ресурсы Action Surge и Second Wind в
-данных персонажа, но сама реализация common actions остаётся независимой от
-класса.
-
-## Bonus Actions И Reactions
-
-Action economy уже резервирует bonus actions и reactions:
-
-- `bonus_action_available` существует и сбрасывается каждый ход.
-- `reaction_available` существует и тратится `OpportunityAttackAction`.
-- `ReadyAction` сохраняет prepared action и trigger description.
-
-Сложные классовые bonus actions и более богатые reaction triggers будут
-добавлены позже. Текущие PPO action masks резервируют категории bonus action и
-reaction, но большинство class-specific вариантов намеренно ещё не реализовано.
-
-## Observations, Action Space И PPO
-
-`src/agents/observation.py` кодирует combat state в fixed-size PyTorch tensor.
-Encoder включает ресурсы актёра, состояния, доступность common actions,
-ближайших союзников, ближайших врагов, дистанции и признаки targetability.
-
-`src/agents/action_space.py` задаёт иерархическое пространство действий:
-
-- action category
-- main action type
-- target index
-- move index
-- option index
-
-`src/agents/ppo_model.py` реализует actor-critic сеть с общим encoder,
-отдельными policy heads и action masking.
-
-## Rewards
-
-`src/combat/rewards.py` содержит reward shaping для:
-
-- нанесённого и полученного урона
-- убийств и смертей
-- победы и поражения
-- слишком длинных или бесполезных ходов
-- тактических common actions, таких как Grapple, Shove, Dodge, Disengage и Help
-- штрафов за low-value Dash, Hide, Ready, Use Object и Improvised actions
-
-Тактические награды намеренно маленькие по сравнению с победой, убийством врага
-и предотвращением смерти союзника.
-
-## Текущие Ограничения
-
-- Правила упрощены; это ограниченное подмножество D&D-like 5e для боевого AI,
-  а не полная цифровая копия D&D.
-- Сложные class-specific bonus actions пока не реализованы.
-- Spellcasting существует только как простой путь через `SpellAbility`; full
-  spell slots, saves, concentration, areas и spell lists пока не реализованы.
-- Items и improvised actions являются упрощёнными placeholders без богатых
-  эффектов.
-- Ready сохраняет prepared action data, но сложное resolution для trigger ещё
-  не реализовано.
-- Карты пока не моделируют obstacles, terrain cost, cover или полноценный line
-  of sight.
-- PPO использует fixed-vector observations вместо graph neural networks.
-- Existing checkpoints могут стать несовместимыми при изменении observation или
-  policy-head sizes.
 
 ## Установка
 
@@ -182,40 +29,133 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-## Запуск Тестов
-
-```bash
-python -m pytest
-```
-
-В этом workspace через локальное virtual environment:
+На Windows из локального venv:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest
-```
-
-## Обучение PPO
-
-```bash
-python scripts/train_ppo.py --episodes 100 --seed 0 --checkpoint checkpoints/ppo_actor_critic.pt
-```
-
-## Запуск Demo
-
-```bash
-python scripts/run_demo.py --checkpoint checkpoints/ppo_actor_critic.pt
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
 ## Запуск GUI
-
-Desktop GUI сделан как отдельный PySide6-слой поверх существующего combat
-engine. Он не запускает обучение модели: PPO/GNN обучение остаётся в
-консольных скриптах `scripts/train_*.py`.
 
 ```bash
 python scripts/run_gui.py
 ```
 
+GUI сделан как отдельный PySide6-слой поверх существующего combat engine. В GUI можно:
+
+- просматривать сохранённых персонажей;
+- создавать и редактировать персонажей через ruleset-aware character builder;
+- запускать случайный бой;
+- настраивать кастомный бой и выбирать карту;
+- вручную расставлять персонажей и врагов в рамках custom battle flow по мере развития редактора боя;
+- смотреть пошаговый бой на клеточной карте;
+- вручную управлять персонажами в поддержанном режиме боя;
+- смотреть сохранённые реплеи;
+- использовать преднастроенную политику PPO Actor-Critic с GNN encoder;
+- автоматически переходить на внутренний fallback agent, если фиксированный checkpoint недоступен.
+
+GUI не даёт пользователю выбирать `model_type`, checkpoint, fallback agent и служебные папки, чтобы демонстрационный режим не ломался из-за несовместимой конфигурации.
+
+Обучение модели НЕ запускается из GUI. Обучение остаётся в существующих CLI scripts, например:
+
+```bash
+python scripts/train_ppo.py --episodes 100 --seed 0 --checkpoint checkpoints/ppo_actor_critic.pt
+```
+
+## Важные папки
+
+- `data/characters/` - JSON-файлы персонажей, созданных в GUI.
+- `replays/` - BattleReplay JSON, сохранённые из демо или GUI.
+- `maps/` - JSON-конфигурации карт: terrain grid и spawn zones.
+- `checkpoints/` - сохранённые PPO/GNN checkpoints для инференса и обучения.
+
+## Карты
+
+Карты задаются JSON-файлами в `maps/`. Конфиг содержит:
+
+- `name`
+- `width`
+- `height`
+- `terrain_grid`
+- `spawn_zones.players`
+- `spawn_zones.enemies`
+
+Поддержанные terrain values:
+
+- `NORMAL`
+- `DIFFICULT_TERRAIN`
+- `BLOCKED`
+- `LOW_COVER`
+- `HIGH_COVER`
+
+В комплекте есть:
+
+- `open_field.json`
+- `cover_arena.json`
+- `difficult_terrain_pass.json`
+- `obstacle_corridor.json`
+
+## Ruleset
+
+Активный ruleset: `srd5e_minimal_2014`.
+
+Поддержано:
+
+- уровни 1-5;
+- классы: Fighter, Cleric, Wizard;
+- подклассы: Champion, Life Domain, School of Evocation;
+- расы: Human, Dwarf, Elf, Halfling;
+- spell levels 0-3;
+- common actions: Attack, CastSpell, Dash, Disengage, Dodge, Help, Hide, Search, UseObject, Ready, Grapple, Shove, Stabilize, EndTurn.
+
+Классы добавляют features/resources, но не владеют общей логикой Attack/Dash/Dodge/etc. Базовые боевые действия реализованы отдельно от классов. Сложные бонусные действия классов и расширенный контент добавляются постепенно.
+
+## CLI
+
+Тестовый demo:
+
+```bash
+python scripts/run_demo.py
+```
+
+Сохранить replay из demo:
+
+```bash
+python scripts/run_demo.py --save-replay
+```
+
+Консольный просмотр replay:
+
+```bash
+python scripts/view_replay_console.py replays/example.json
+```
+
+Оценка политики:
+
+```bash
+python scripts/evaluate_policy.py --by-level
+```
+
+## Тесты
+
+```bash
+python -m pytest
+```
+
+На Windows из локального venv:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest
+```
+
+## Текущие ограничения
+
+- Ruleset намеренно минимальный.
+- GUI не запускает обучение.
+- Custom battle setup уже использует JSON-карты и preview, но полноценный drag-and-drop редактор боя ещё в roadmap.
+- Предметы и improvised actions реализованы упрощённо.
+- Некоторые class features/spells сохранены как not implemented и не попадают в action masks.
+
 ## Roadmap
 
-См. [ROADMAP.md](ROADMAP.md) с планируемыми работами и текущими приоритетами.
+См. [ROADMAP.md](ROADMAP.md).

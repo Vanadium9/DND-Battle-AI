@@ -17,13 +17,13 @@ class NavigationItem:
 
 
 NAVIGATION_ITEMS: tuple[NavigationItem, ...] = (
-    NavigationItem("home", "Главная"),
-    NavigationItem("characters", "Персонажи"),
-    NavigationItem("character_create", "Создать персонажа"),
-    NavigationItem("random_battle", "Случайный бой"),
-    NavigationItem("custom_battle", "Кастомный бой"),
-    NavigationItem("replays", "Реплеи"),
-    NavigationItem("settings", "Настройки"),
+    NavigationItem("home", "⌂ Главная"),
+    NavigationItem("characters", "👥 Персонажи"),
+    NavigationItem("character_create", "+ Создать персонажа"),
+    NavigationItem("random_battle", "⚔ Случайный бой"),
+    NavigationItem("custom_battle", "⚔ Кастомный бой"),
+    NavigationItem("replays", "▶ Реплеи"),
+    NavigationItem("settings", "⚙ Настройки"),
 )
 
 

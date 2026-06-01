@@ -13,12 +13,27 @@ def apply_theme(app: QApplication) -> None:
     app.setStyleSheet(
         """
         QMainWindow {
-            background: #f4f6f8;
+            background: #f2f5f7;
         }
 
         QWidget {
             color: #1f2933;
             font-size: 10pt;
+        }
+
+        QStatusBar {
+            background: #ffffff;
+            border-top: 1px solid #d8e0e8;
+            color: #52616f;
+        }
+
+        QLabel#statusChip {
+            background: #eef3f6;
+            border: 1px solid #d8e0e8;
+            border-radius: 4px;
+            padding: 3px 8px;
+            color: #253549;
+            font-weight: 600;
         }
 
         QLabel#screenTitle {
@@ -74,6 +89,21 @@ def apply_theme(app: QApplication) -> None:
             border-radius: 8px;
         }
 
+        QGroupBox {
+            border: 1px solid #d8e0e8;
+            border-radius: 6px;
+            margin-top: 10px;
+            padding: 12px 10px 10px 10px;
+            font-weight: 700;
+            color: #253549;
+        }
+
+        QGroupBox::title {
+            subcontrol-origin: margin;
+            left: 10px;
+            padding: 0 4px;
+        }
+
         QPushButton {
             background: #2e7d72;
             color: #ffffff;
@@ -104,6 +134,64 @@ def apply_theme(app: QApplication) -> None:
             background: #9f4c4c;
         }
 
+        QLineEdit,
+        QComboBox,
+        QSpinBox,
+        QTextEdit,
+        QListWidget,
+        QTableWidget {
+            background: #ffffff;
+            border: 1px solid #cbd5df;
+            border-radius: 5px;
+            padding: 5px;
+            selection-background-color: #2e7d72;
+            selection-color: #ffffff;
+        }
+
+        QLineEdit:focus,
+        QComboBox:focus,
+        QSpinBox:focus,
+        QTextEdit:focus,
+        QListWidget:focus,
+        QTableWidget:focus {
+            border: 1px solid #2e7d72;
+        }
+
+        QTabWidget::pane {
+            border: 1px solid #d8e0e8;
+            border-radius: 6px;
+            background: #ffffff;
+        }
+
+        QTabBar::tab {
+            background: #eef3f6;
+            border: 1px solid #d8e0e8;
+            padding: 8px 12px;
+            margin-right: 2px;
+            border-top-left-radius: 5px;
+            border-top-right-radius: 5px;
+        }
+
+        QTabBar::tab:selected {
+            background: #ffffff;
+            color: #17202a;
+            font-weight: 700;
+        }
+
+        QHeaderView::section {
+            background: #eef3f6;
+            color: #253549;
+            border: none;
+            border-bottom: 1px solid #d8e0e8;
+            padding: 7px;
+            font-weight: 700;
+        }
+
+        QTableWidget {
+            gridline-color: #e1e7ee;
+            alternate-background-color: #f8fafc;
+        }
+
         QFrame#characterCard {
             background: #f9fbfc;
             border: 1px solid #d8e0e8;
@@ -129,6 +217,17 @@ def apply_theme(app: QApplication) -> None:
             color: #6b7785;
             padding: 36px;
             font-size: 12pt;
+        }
+
+        QLabel#inlineStatus {
+            color: #52616f;
+            padding: 6px 0;
+        }
+
+        QLabel#warningStatus {
+            color: #9f4c4c;
+            font-weight: 600;
+            padding: 6px 0;
         }
 
         QPlainTextEdit {

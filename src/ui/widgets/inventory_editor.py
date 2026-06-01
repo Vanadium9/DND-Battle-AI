@@ -25,8 +25,17 @@ class InventoryEditor(QWidget):
             str(item.get("name")): int(item.get("quantity", 0))
             for item in inventory
         }
+        changed = False
         for name, spin_box in self._spin_boxes.items():
-            spin_box.setValue(quantities.get(name, 0))
+            value = quantities.get(name, 0)
+            if spin_box.value() == value:
+                continue
+            was_blocked = spin_box.blockSignals(True)
+            spin_box.setValue(value)
+            spin_box.blockSignals(was_blocked)
+            changed = True
+        if changed:
+            self.inventory_changed.emit()
 
     def inventory_items(self) -> tuple[dict[str, object], ...]:
         """Return selected item payloads."""
@@ -66,7 +75,7 @@ class InventoryEditor(QWidget):
             label = QLabel(definition.name)
             spin_box = QSpinBox()
             spin_box.setRange(0, 99)
-            spin_box.valueChanged.connect(self.inventory_changed.emit)
+            spin_box.valueChanged.connect(lambda _value: self.inventory_changed.emit())
             self._spin_boxes[definition.name] = spin_box
             grid.addWidget(label, row, 0)
             grid.addWidget(spin_box, row, 1)

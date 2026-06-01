@@ -5,22 +5,47 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QAbstractAnimation, QTimer, QVariantAnimation
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFrame,
     QHBoxLayout,
     QLabel,
     QMessageBox,
     QPushButton,
     QSplitter,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
-from combat import BattleReplay, CombatAction, CombatEnvironment, EndTurnAction, Team
+from combat import (
+    ActionResult,
+    BattleReplay,
+    CombatAction,
+    CombatEnvironment,
+    EndTurnAction,
+    Position,
+    Team,
+)
 from inference import ActionSelectionError
-from ui.services import BattleSetupResult, ModelService
+from ui.animations import (
+    BattleAnimationFrame,
+    animation_duration_ms,
+    build_battle_animations,
+    normalize_animation_speed,
+)
+from ui.services import (
+    BattleSetupResult,
+    ManualActionBuilder,
+    ManualActionOption,
+    ManualActionPlan,
+    ManualTargetMode,
+    ModelService,
+)
+from ui.settings import normalize_autobattle_delay
 from ui.widgets import (
+    ActionPanel,
     BattleMapWidget,
     CombatLogWidget,
     CreatureStatusPanel,
@@ -46,24 +71,42 @@ class BattleScreen(QWidget):
         self._environment: CombatEnvironment | None = None
         self._replay: BattleReplay | None = None
         self._selected_creature_id: int | None = None
+        self._manual_action_builder = ManualActionBuilder()
+        self._manual_plan: ManualActionPlan | None = None
+        self._pending_manual_option: ManualActionOption | None = None
         self._finished_manually = False
         self._winner_logged = False
+        self._animation_running = False
 
         self._summary_label = QLabel("Бой не запущен.")
         self._active_label = QLabel("")
         self._map_widget = BattleMapWidget()
         self._initiative_panel = InitiativePanel()
         self._status_panel = CreatureStatusPanel()
+        self._action_panel = ActionPanel()
         self._log_widget = CombatLogWidget()
         self._timer = QTimer(self)
-        self._timer.setInterval(350)
+        self._timer.setInterval(self._autobattle_delay_ms())
         self._timer.timeout.connect(self._next_step)
+        self._animation = QVariantAnimation(self)
+        self._animation.setStartValue(0.0)
+        self._animation.setEndValue(1.0)
+        self._animation.valueChanged.connect(self._on_animation_value_changed)
+        self._animation.finished.connect(self._on_animation_finished)
+        self._active_animations = ()
 
         self._next_button = QPushButton("Следующий шаг")
         self._auto_button = QPushButton("Автобой")
         self._pause_button = QPushButton("Пауза")
         self._finish_button = QPushButton("Завершить бой")
         self._save_replay_button = QPushButton("Сохранить реплей")
+        self._animations_checkbox = QCheckBox("Анимации")
+        self._animations_checkbox.setChecked(self._model_service.settings.animations_enabled)
+        self._animation_speed_spin = QSpinBox()
+        self._animation_speed_spin.setRange(300, 1500)
+        self._animation_speed_spin.setSingleStep(100)
+        self._animation_speed_spin.setSuffix(" мс")
+        self._animation_speed_spin.setValue(self._animation_speed_ms())
 
         self._build_layout()
         self._connect_signals()
@@ -73,9 +116,12 @@ class BattleScreen(QWidget):
         """Attach a new environment to the screen."""
 
         self._timer.stop()
+        self._stop_animation(clear=True)
         self._setup_result = setup_result
         self._environment = setup_result.environment
         self._selected_creature_id = self._environment.combat_state.active_actor_id
+        self._pending_manual_option = None
+        self._manual_plan = None
         self._finished_manually = False
         self._winner_logged = False
         self._replay = BattleReplay(
@@ -95,8 +141,11 @@ class BattleScreen(QWidget):
             self._summary_label.setText("Бой не запущен.")
             self._active_label.setText("")
             self._map_widget.set_environment(None)
+            self._map_widget.set_manual_click_mode(False)
+            self._map_widget.set_manual_highlights()
             self._initiative_panel.set_environment(None)
             self._status_panel.set_environment(None)
+            self._action_panel.set_viewer_mode("Бой не запущен.")
             self._log_widget.set_entries(())
             self._set_controls_enabled(False)
             return
@@ -117,6 +166,7 @@ class BattleScreen(QWidget):
             self._selected_creature_id,
         )
         self._log_widget.set_entries(self._environment.action_log[-120:])
+        self._sync_manual_controls()
         self._set_controls_enabled(not self._finished_manually)
 
     def _build_layout(self) -> None:
@@ -157,6 +207,10 @@ class BattleScreen(QWidget):
         layout.addWidget(self._pause_button)
         layout.addWidget(self._finish_button)
         layout.addWidget(self._save_replay_button)
+        layout.addSpacing(16)
+        layout.addWidget(self._animations_checkbox)
+        layout.addWidget(QLabel("Задержка"))
+        layout.addWidget(self._animation_speed_spin)
         layout.addStretch(1)
         return bar
 
@@ -166,6 +220,7 @@ class BattleScreen(QWidget):
         layout.setContentsMargins(10, 0, 0, 0)
         layout.setSpacing(10)
         layout.addWidget(self._initiative_panel, stretch=1)
+        layout.addWidget(self._action_panel, stretch=2)
         layout.addWidget(self._status_panel, stretch=2)
         return panel
 
@@ -175,10 +230,16 @@ class BattleScreen(QWidget):
         self._pause_button.clicked.connect(self._pause_auto_battle)
         self._finish_button.clicked.connect(self._finish_battle)
         self._save_replay_button.clicked.connect(self._save_replay)
+        self._animations_checkbox.stateChanged.connect(self._save_animation_settings)
+        self._animation_speed_spin.valueChanged.connect(self._save_animation_settings)
+        self._action_panel.option_selected.connect(self._select_manual_option)
+        self._map_widget.cell_clicked.connect(self._handle_manual_cell_clicked)
         self._map_widget.creature_selected.connect(self._select_creature)
         self._initiative_panel.creature_selected.connect(self._select_creature)
 
     def _next_step(self) -> None:
+        if self._animation_running:
+            return
         if self._environment is None or self._setup_result is None:
             return
         if self._finished_manually:
@@ -215,6 +276,7 @@ class BattleScreen(QWidget):
             )
         except ActionSelectionError as error:
             self._environment.action_log.append(f"AI action error: {error}")
+            QMessageBox.warning(self, "Невозможно выполнить действие", str(error))
             self._pause_auto_battle()
             self.refresh()
             return
@@ -225,11 +287,13 @@ class BattleScreen(QWidget):
             self._replay.record_step(before, self._environment.combat_state, action, result)
         self._selected_creature_id = self._environment.combat_state.active_actor_id
         self.refresh()
+        self._play_step_animation(before, action, result)
 
     def _start_auto_battle(self) -> None:
         if self._environment is None or self._environment.is_done():
             self.refresh()
             return
+        self._timer.setInterval(self._autobattle_delay_ms())
         self._timer.start()
         self.refresh()
 
@@ -240,7 +304,18 @@ class BattleScreen(QWidget):
     def _finish_battle(self) -> None:
         if self._environment is None:
             return
+        if not self._environment.is_done():
+            answer = QMessageBox.question(
+                self,
+                "Завершить активный бой",
+                "Завершить текущий бой без доигрывания?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
         self._timer.stop()
+        self._stop_animation(clear=True)
         self._finished_manually = True
         self._environment.action_log.append("Бой завершён вручную.")
         self.refresh()
@@ -250,7 +325,8 @@ class BattleScreen(QWidget):
             QMessageBox.information(self, "Реплей", "Нет активного боя для сохранения.")
             return
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        path = self._replay.save(DEFAULT_REPLAY_DIR / f"gui_battle_{timestamp}.json")
+        replay_dir = Path(self._model_service.settings.replay_dir or DEFAULT_REPLAY_DIR)
+        path = self._replay.save(replay_dir / f"gui_battle_{timestamp}.json")
         QMessageBox.information(self, "Реплей сохранён", f"Реплей сохранён: {path}")
 
     def _select_creature(self, creature_id: int) -> None:
@@ -260,11 +336,221 @@ class BattleScreen(QWidget):
     def _set_controls_enabled(self, enabled: bool) -> None:
         active = enabled and self._environment is not None
         done = active and self._environment.is_done()
-        self._next_button.setEnabled(active and not done)
-        self._auto_button.setEnabled(active and not done and not self._timer.isActive())
+        manual_current = active and self._active_actor_is_manual()
+        can_step = active and not done and not self._animation_running and not manual_current
+        self._next_button.setEnabled(can_step)
+        self._auto_button.setEnabled(can_step and not self._timer.isActive())
         self._pause_button.setEnabled(active and self._timer.isActive())
         self._finish_button.setEnabled(active and not done)
         self._save_replay_button.setEnabled(self._replay is not None)
+        self._animations_checkbox.setEnabled(True)
+        self._animation_speed_spin.setEnabled(True)
+
+    def _sync_manual_controls(self) -> None:
+        if self._environment is None or self._setup_result is None:
+            return
+        actor_id = self._environment.combat_state.active_actor_id
+        if actor_id is None or self._environment.is_done() or not self._active_actor_is_manual():
+            self._manual_plan = None
+            self._pending_manual_option = None
+            self._action_panel.set_viewer_mode()
+            self._map_widget.set_manual_click_mode(False)
+            self._map_widget.set_manual_highlights()
+            return
+
+        self._manual_plan = self._manual_action_builder.build_plan(
+            self._environment.combat_state,
+            actor_id,
+        )
+        if self._pending_manual_option is not None:
+            current_ids = {option.id for option in self._manual_plan.options}
+            if self._pending_manual_option.id not in current_ids:
+                self._pending_manual_option = None
+        self._action_panel.set_plan(self._manual_plan, self._pending_manual_option)
+        self._map_widget.set_manual_click_mode(
+            self._pending_manual_option is not None
+            and self._pending_manual_option.target_mode is not ManualTargetMode.NONE
+        )
+        movement, targets = self._manual_highlights()
+        self._map_widget.set_manual_highlights(movement=movement, targets=targets)
+
+    def _select_manual_option(self, option: ManualActionOption) -> None:
+        if self._environment is None or not self._active_actor_is_manual():
+            return
+        actor_id = self._environment.combat_state.active_actor_id
+        if actor_id is None:
+            return
+        if option.target_mode is ManualTargetMode.NONE:
+            try:
+                action = self._manual_action_builder.build_action(
+                    self._environment.combat_state,
+                    actor_id,
+                    option,
+                )
+            except ValueError as error:
+                self._environment.action_log.append(f"Manual action error: {error}")
+                QMessageBox.warning(self, "Невозможно выполнить действие", str(error))
+                self.refresh()
+                return
+            self._pending_manual_option = None
+            self._execute_selected_action(action, prefix="Ручное действие")
+            return
+
+        self._pending_manual_option = option
+        self._sync_manual_controls()
+
+    def _handle_manual_cell_clicked(self, position: object) -> None:
+        if (
+            self._environment is None
+            or self._pending_manual_option is None
+            or not isinstance(position, Position)
+        ):
+            return
+        actor_id = self._environment.combat_state.active_actor_id
+        if actor_id is None or not self._active_actor_is_manual():
+            return
+        target_id = self._creature_id_at(position)
+        try:
+            action = self._manual_action_builder.build_action(
+                self._environment.combat_state,
+                actor_id,
+                self._pending_manual_option,
+                target_id=target_id,
+                target_cell=position,
+            )
+        except ValueError as error:
+            self._environment.action_log.append(f"Manual action error: {error}")
+            QMessageBox.warning(self, "Невозможно выполнить действие", str(error))
+            self.refresh()
+            return
+
+        self._pending_manual_option = None
+        self._execute_selected_action(action, prefix="Ручное действие")
+
+    def _execute_selected_action(self, action: CombatAction, *, prefix: str) -> None:
+        if self._environment is None:
+            return
+        before = self._replay.snapshot_state(self._environment.combat_state) if self._replay else None
+        self._environment.action_log.append(f"{prefix}: {_describe_action(action)}")
+        result = self._environment.step(action)
+        if self._replay is not None and before is not None:
+            self._replay.record_step(before, self._environment.combat_state, action, result)
+        self._selected_creature_id = self._environment.combat_state.active_actor_id
+        self.refresh()
+        self._play_step_animation(before, action, result)
+
+    def _manual_highlights(self) -> tuple[set[Position] | None, set[Position] | None]:
+        if self._environment is None or self._pending_manual_option is None:
+            return None, None
+        option = self._pending_manual_option
+        if option.target_mode is ManualTargetMode.CELL:
+            cells = set(option.target_cells)
+            if option.metadata.get("kind") == "move":
+                return cells, set()
+            return set(), cells
+        if option.target_mode is ManualTargetMode.CREATURE:
+            targets = {
+                self._environment.combat_state.characters[target_id].position
+                for target_id in option.target_ids
+                if 0 <= target_id < len(self._environment.combat_state.characters)
+            }
+            return set(), targets
+        return None, None
+
+    def _creature_id_at(self, position: Position) -> int | None:
+        if self._environment is None:
+            return None
+        for creature_id, creature in enumerate(self._environment.combat_state.characters):
+            if creature.position == position:
+                return creature_id
+        return None
+
+    def _active_actor_is_manual(self) -> bool:
+        if self._environment is None or self._setup_result is None:
+            return False
+        actor_id = self._environment.combat_state.active_actor_id
+        if actor_id is None:
+            return False
+        return _actor_is_manual_controlled(
+            self._environment,
+            actor_id,
+            self._setup_result.controller_mode,
+        )
+
+    def _play_step_animation(
+        self,
+        before: dict[str, object] | None,
+        action: CombatAction,
+        result: ActionResult,
+    ) -> None:
+        if self._environment is None:
+            return
+        self._stop_animation(clear=True)
+        if not self._animations_checkbox.isChecked():
+            return
+        animations = build_battle_animations(
+            before,
+            self._environment.combat_state,
+            action,
+            result,
+        )
+        if not animations:
+            return
+        self._active_animations = animations
+        self._animation_running = True
+        self._animation.setDuration(animation_duration_ms(self._animation_speed_ms()))
+        self._map_widget.set_animation_frame(
+            BattleAnimationFrame(animations=animations, progress=0.0)
+        )
+        self._set_controls_enabled(not self._finished_manually)
+        self._animation.start()
+
+    def _on_animation_value_changed(self, value: object) -> None:
+        if not self._animation_running:
+            return
+        try:
+            progress = float(value)
+        except (TypeError, ValueError):
+            progress = 1.0
+        self._map_widget.set_animation_frame(
+            BattleAnimationFrame(
+                animations=self._active_animations,
+                progress=progress,
+            )
+        )
+
+    def _on_animation_finished(self) -> None:
+        self._animation_running = False
+        self._active_animations = ()
+        self._map_widget.clear_animation()
+        self._set_controls_enabled(not self._finished_manually)
+
+    def _stop_animation(self, *, clear: bool) -> None:
+        if self._animation.state() == QAbstractAnimation.State.Running:
+            self._animation.stop()
+        self._animation_running = False
+        self._active_animations = ()
+        if clear:
+            self._map_widget.clear_animation()
+
+    def _save_animation_settings(self) -> None:
+        speed = self._animation_speed_ms()
+        self._model_service.set_settings(
+            animations_enabled=self._animations_checkbox.isChecked(),
+            animation_speed=speed,
+            autobattle_delay=speed,
+        )
+        self._timer.setInterval(self._autobattle_delay_ms())
+        if not self._animations_checkbox.isChecked():
+            self._stop_animation(clear=True)
+
+    def _animation_speed_ms(self) -> int:
+        if hasattr(self, "_animation_speed_spin"):
+            return normalize_animation_speed(self._animation_speed_spin.value())
+        return normalize_animation_speed(self._model_service.settings.animation_speed)
+
+    def _autobattle_delay_ms(self) -> int:
+        return normalize_autobattle_delay(self._model_service.settings.autobattle_delay)
 
     def _log_winner(self) -> None:
         if self._environment is None:
@@ -303,6 +589,19 @@ def _actor_is_ai_controlled(
         return actor.team is Team.PLAYERS
     if controller_mode in {"ai_enemies", "manual_players_ai_enemies"}:
         return actor.team is Team.ENEMIES
+    return False
+
+
+def _actor_is_manual_controlled(
+    environment: CombatEnvironment,
+    actor_id: int,
+    controller_mode: str,
+) -> bool:
+    actor = environment.combat_state.character_at(actor_id)
+    if actor is None:
+        return False
+    if controller_mode == "manual_players_ai_enemies":
+        return actor.team is Team.PLAYERS
     return False
 
 

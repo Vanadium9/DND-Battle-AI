@@ -1,0 +1,16 @@
+{
+  "name": "obstacle_corridor",
+  "width": 9,
+  "height": 5,
+  "terrain_grid": [
+    ["NORMAL", "NORMAL", "NORMAL", "BLOCKED", "NORMAL", "BLOCKED", "NORMAL", "NORMAL", "NORMAL"],
+    ["NORMAL", "LOW_COVER", "NORMAL", "BLOCKED", "NORMAL", "BLOCKED", "NORMAL", "LOW_COVER", "NORMAL"],
+    ["NORMAL", "NORMAL", "NORMAL", "NORMAL", "NORMAL", "NORMAL", "NORMAL", "NORMAL", "NORMAL"],
+    ["NORMAL", "LOW_COVER", "NORMAL", "BLOCKED", "NORMAL", "BLOCKED", "NORMAL", "LOW_COVER", "NORMAL"],
+    ["NORMAL", "NORMAL", "NORMAL", "BLOCKED", "NORMAL", "BLOCKED", "NORMAL", "NORMAL", "NORMAL"]
+  ],
+  "spawn_zones": {
+    "players": [[0, 0], [0, 2], [0, 4], [1, 2]],
+    "enemies": [[8, 0], [8, 2], [8, 4], [7, 2]]
+  }
+}

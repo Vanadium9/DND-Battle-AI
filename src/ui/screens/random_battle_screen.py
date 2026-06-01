@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QFormLayout,
@@ -20,7 +21,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from combat.map_config import MapConfigValidationError
 from ui.services import BattleSetupRequest, BattleSetupResult, BattleSetupService, ModelService
+from ui.widgets import MapPreviewWidget
 from ui.widgets.screen import ScreenFrame
 
 
@@ -46,12 +49,17 @@ class RandomBattleScreen(QWidget):
         self._controller_combo = QComboBox()
         self._seed_enabled = QCheckBox("Использовать seed")
         self._seed_spin = QSpinBox()
+        self._map_preview = MapPreviewWidget()
         self._summary_text = QTextEdit()
+        self._start_button = QPushButton("Начать бой")
         self._build_layout()
+        self._apply_settings_seed()
         self.refresh()
 
     def refresh(self) -> None:
         self._populate_characters()
+        self._populate_map_options()
+        self._update_map_preview()
         self._update_summary()
 
     def _build_layout(self) -> None:
@@ -71,11 +79,10 @@ class RandomBattleScreen(QWidget):
 
         button_row = QHBoxLayout()
         refresh_button = QPushButton("Обновить описание")
-        start_button = QPushButton("Начать бой")
         refresh_button.clicked.connect(self._update_summary)
-        start_button.clicked.connect(self._start_battle)
+        self._start_button.clicked.connect(self._start_battle)
         button_row.addWidget(refresh_button)
-        button_row.addWidget(start_button)
+        button_row.addWidget(self._start_button)
         button_row.addStretch(1)
         frame.content_layout.addLayout(button_row)
         layout.addWidget(frame)
@@ -100,7 +107,7 @@ class RandomBattleScreen(QWidget):
         form = QFormLayout(form_group)
 
         self._fill_combo(self._difficulty_combo, self._battle_setup_service.difficulties())
-        self._fill_combo(self._map_combo, self._battle_setup_service.maps())
+        self._populate_map_options()
         self._fill_combo(self._enemy_group_combo, self._battle_setup_service.enemy_groups())
         self._fill_combo(self._controller_combo, self._battle_setup_service.controller_modes())
         self._set_combo_data(self._difficulty_combo, "medium")
@@ -131,6 +138,8 @@ class RandomBattleScreen(QWidget):
         form.addRow("Seed", seed_row)
 
         layout.addWidget(form_group)
+        layout.addWidget(QLabel("Preview карты"))
+        layout.addWidget(self._map_preview, stretch=1)
         self._summary_text.setReadOnly(True)
         self._summary_text.setMinimumHeight(180)
         layout.addWidget(QLabel("Краткое описание боя"))
@@ -157,12 +166,20 @@ class RandomBattleScreen(QWidget):
 
     def _start_battle(self) -> None:
         request = self._build_request()
+        self._set_start_busy(True)
         try:
             result = self._battle_setup_service.create_random_battle(request)
+        except MapConfigValidationError as error:
+            QMessageBox.warning(self, "Невалидная карта", str(error))
+            self._summary_text.setPlainText(str(error))
+            self._set_start_busy(False)
+            return
         except ValueError as error:
             QMessageBox.warning(self, "Нельзя начать бой", str(error))
             self._summary_text.setPlainText(str(error))
+            self._set_start_busy(False)
             return
+        self._set_start_busy(False)
         if not self._model_service.is_model_loaded():
             QMessageBox.warning(
                 self,
@@ -172,12 +189,33 @@ class RandomBattleScreen(QWidget):
         self.battle_started.emit(result)
 
     def _update_summary(self) -> None:
+        if not self._battle_setup_service.maps():
+            self._summary_text.setPlainText("Нет карт. Проверьте папку maps/ в настройках.")
+            self._map_preview.set_error("Нет карт. Проверьте папку maps/ в настройках.")
+            return
         request = self._build_request()
+        self._update_map_preview(request)
         try:
             summary = self._battle_setup_service.preview_battle(request)
         except ValueError as error:
             summary = str(error)
         self._summary_text.setPlainText(summary)
+
+    def _update_map_preview(self, request: BattleSetupRequest | None = None) -> None:
+        if not self._battle_setup_service.maps():
+            self._map_preview.set_error("Нет карт. Проверьте папку maps/ в настройках.")
+            return
+        request = request or self._build_request()
+        try:
+            map_name = self._battle_setup_service.resolve_map_name(
+                request.map_name,
+                request.seed,
+            )
+            self._map_preview.set_map_config(
+                self._battle_setup_service.get_map_config(map_name)
+            )
+        except (ValueError, MapConfigValidationError) as error:
+            self._map_preview.set_error(str(error))
 
     def _build_request(self) -> BattleSetupRequest:
         return BattleSetupRequest(
@@ -203,6 +241,41 @@ class RandomBattleScreen(QWidget):
     def _toggle_seed(self) -> None:
         self._seed_spin.setEnabled(self._seed_enabled.isChecked())
         self._update_summary()
+
+    def _apply_settings_seed(self) -> None:
+        seed = self._model_service.settings.random_battle_seed
+        enabled = seed is not None
+        checkbox_blocked = self._seed_enabled.blockSignals(True)
+        spin_blocked = self._seed_spin.blockSignals(True)
+        self._seed_enabled.setChecked(enabled)
+        self._seed_spin.setEnabled(enabled)
+        if seed is not None:
+            self._seed_spin.setValue(seed)
+        self._seed_enabled.blockSignals(checkbox_blocked)
+        self._seed_spin.blockSignals(spin_blocked)
+
+    def _populate_map_options(self) -> None:
+        current = self._map_combo.currentData()
+        maps = self._battle_setup_service.maps()
+        self._map_combo.blockSignals(True)
+        self._map_combo.clear()
+        if not maps:
+            self._map_combo.addItem("Нет карт", "")
+            self._map_combo.setEnabled(False)
+            self._start_button.setEnabled(False)
+            self._map_preview.set_error("Нет карт. Проверьте папку maps/ в настройках.")
+        else:
+            self._map_combo.setEnabled(True)
+            self._start_button.setEnabled(True)
+            self._fill_combo(self._map_combo, maps)
+            if current is not None:
+                self._set_combo_data(self._map_combo, str(current))
+        self._map_combo.blockSignals(False)
+
+    def _set_start_busy(self, busy: bool) -> None:
+        self._start_button.setEnabled(not busy)
+        self._start_button.setText("Создание боя..." if busy else "Начать бой")
+        QApplication.processEvents()
 
     @staticmethod
     def _fill_combo(combo: QComboBox, values: dict[str, str]) -> None:

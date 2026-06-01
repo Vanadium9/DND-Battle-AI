@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import random
-from typing import Callable, Iterable
+from pathlib import Path
+from typing import Iterable
 
 from character import CharacterRepository, InternalCharacter
 from combat import (
@@ -24,7 +25,6 @@ from combat import (
     SkeletonArcher,
     Stats,
     Team,
-    TerrainType,
     WeaponAttack,
     WizardEvoker,
     Wolf,
@@ -32,6 +32,14 @@ from combat import (
 from combat.class_features import Resource
 from combat.damage import normalize_damage_type_set
 from combat.inventory import get_item_definition
+from combat.map_config import (
+    DEFAULT_MAP_CONFIG_DIR,
+    MapConfig,
+    MapConfigValidationError,
+    load_map_config_by_name,
+    map_options,
+    normalize_map_key,
+)
 from combat.race_traits import RaceTraits
 from combat.spellcasting import resolve_spell_list
 
@@ -40,14 +48,6 @@ DIFFICULTIES: dict[str, str] = {
     "easy": "Лёгкий",
     "medium": "Средний",
     "hard": "Сложный",
-}
-
-MAP_OPTIONS: dict[str, str] = {
-    "open_field": "open_field",
-    "cover_arena": "cover_arena",
-    "difficult_terrain_pass": "difficult_terrain_pass",
-    "obstacle_corridor": "obstacle_corridor",
-    "random": "random",
 }
 
 ENEMY_GROUPS: dict[str, str] = {
@@ -107,8 +107,10 @@ class BattleSetupService:
     def __init__(
         self,
         character_repository: CharacterRepository | None = None,
+        map_dir: str | Path = DEFAULT_MAP_CONFIG_DIR,
     ) -> None:
         self.character_repository = character_repository or CharacterRepository()
+        self.map_dir = Path(map_dir)
 
     def list_saved_characters(self) -> list[InternalCharacter]:
         return self.character_repository.list_characters()
@@ -120,7 +122,10 @@ class BattleSetupService:
         return dict(DIFFICULTIES)
 
     def maps(self) -> dict[str, str]:
-        return dict(MAP_OPTIONS)
+        options = map_options(self.map_dir)
+        if options:
+            options["random"] = "random"
+        return options
 
     def enemy_groups(self) -> dict[str, str]:
         return dict(ENEMY_GROUPS)
@@ -148,10 +153,11 @@ class BattleSetupService:
 
         self._validate_request(request)
         resolved_map_name = self.resolve_map_name(request.map_name, request.seed)
-        grid_map = self.create_map(resolved_map_name)
+        map_config = self.get_map_config(resolved_map_name)
+        grid_map = map_config.to_grid_map()
         party = self._resolve_party(request)
         enemies = self._resolve_enemies(request, len(party))
-        self._place_characters(grid_map, party, enemies)
+        self._place_characters(grid_map, party, enemies, map_config)
         environment = CombatEnvironment(
             characters=[*party, *enemies],
             grid_map=grid_map,
@@ -182,26 +188,24 @@ class BattleSetupService:
         )
 
     def resolve_map_name(self, map_name: str, seed: int | None = None) -> str:
-        normalized = _key(map_name)
+        normalized = normalize_map_key(map_name)
         if normalized == "random":
             rng = random.Random(seed)
-            return rng.choice(tuple(key for key in MAP_OPTIONS if key != "random"))
-        if normalized not in MAP_OPTIONS:
+            return rng.choice(tuple(key for key in self.maps() if key != "random"))
+        if normalized not in self.maps():
             raise ValueError(f"Unknown map: {map_name}")
         return normalized
 
+    def get_map_config(self, map_name: str) -> MapConfig:
+        """Return a validated map config for a selected map name."""
+
+        try:
+            return load_map_config_by_name(map_name, self.map_dir)
+        except MapConfigValidationError:
+            raise
+
     def create_map(self, map_name: str) -> GridMap:
-        normalized = _key(map_name)
-        factories: dict[str, Callable[[], GridMap]] = {
-            "open_field": _open_field_map,
-            "cover_arena": _cover_arena_map,
-            "difficult_terrain_pass": _difficult_terrain_pass_map,
-            "obstacle_corridor": _obstacle_corridor_map,
-        }
-        factory = factories.get(normalized)
-        if factory is None:
-            raise ValueError(f"Unknown map: {map_name}")
-        return factory()
+        return self.get_map_config(map_name).to_grid_map()
 
     def _validate_request(self, request: BattleSetupRequest) -> None:
         if request.party_preset not in PARTY_PRESETS:
@@ -212,6 +216,8 @@ class BattleSetupService:
             raise ValueError(f"Unknown enemy group: {request.enemy_group}")
         if request.controller_mode not in CONTROLLER_MODES:
             raise ValueError(f"Unknown controller mode: {request.controller_mode}")
+        if normalize_map_key(request.map_name) not in self.maps():
+            raise ValueError(f"Unknown map: {request.map_name}")
         if request.party_preset == "none" and not request.saved_character_ids:
             raise ValueError("Выберите хотя бы одного персонажа или готовый party preset.")
 
@@ -267,9 +273,18 @@ class BattleSetupService:
         grid_map: GridMap,
         party: list[Character],
         enemies: list[Character],
+        map_config: MapConfig,
     ) -> None:
-        player_positions = _spawn_positions(grid_map, Team.PLAYERS, len(party))
-        enemy_positions = _spawn_positions(grid_map, Team.ENEMIES, len(enemies))
+        player_positions = _configured_spawn_positions(
+            map_config,
+            Team.PLAYERS,
+            len(party),
+        )
+        enemy_positions = _configured_spawn_positions(
+            map_config,
+            Team.ENEMIES,
+            len(enemies),
+        )
         for character, position in zip(party, player_positions):
             character.team = Team.PLAYERS
             character.position = position
@@ -432,76 +447,21 @@ def _grid_speed(speed: int) -> int:
     return max(1, speed)
 
 
-def _spawn_positions(grid_map: GridMap, team: Team, count: int) -> list[Position]:
+def _configured_spawn_positions(
+    map_config: MapConfig,
+    team: Team,
+    count: int,
+) -> list[Position]:
     if count <= 0:
         return []
-    positions = [
-        Position(x, y)
-        for y in range(grid_map.height)
-        for x in range(grid_map.width)
-        if grid_map.is_walkable(Position(x, y))
-    ]
-    if team is Team.PLAYERS:
-        positions.sort(key=lambda position: (position.x, abs(position.y - grid_map.height // 2), position.y))
-    else:
-        positions.sort(key=lambda position: (-position.x, abs(position.y - grid_map.height // 2), position.y))
+    positions = (
+        map_config.spawn_zones.players
+        if team is Team.PLAYERS
+        else map_config.spawn_zones.enemies
+    )
     if len(positions) < count:
-        raise ValueError("Map has not enough walkable spawn cells.")
-    return positions[:count]
-
-
-def _open_field_map() -> GridMap:
-    return GridMap(width=8, height=5)
-
-
-def _cover_arena_map() -> GridMap:
-    normal = TerrainType.NORMAL
-    low = TerrainType.LOW_COVER
-    high = TerrainType.HIGH_COVER
-    return GridMap(
-        width=8,
-        height=5,
-        terrain_grid=(
-            (normal, normal, normal, normal, normal, low, normal, normal),
-            (normal, low, normal, normal, normal, normal, low, normal),
-            (normal, normal, normal, high, normal, normal, normal, normal),
-            (normal, low, normal, normal, normal, normal, low, normal),
-            (normal, normal, normal, normal, normal, low, normal, normal),
-        ),
-    )
-
-
-def _difficult_terrain_pass_map() -> GridMap:
-    normal = TerrainType.NORMAL
-    difficult = TerrainType.DIFFICULT_TERRAIN
-    return GridMap(
-        width=8,
-        height=5,
-        terrain_grid=(
-            (normal, normal, difficult, difficult, difficult, normal, normal, normal),
-            (normal, normal, difficult, difficult, difficult, normal, normal, normal),
-            (normal, normal, difficult, difficult, difficult, normal, normal, normal),
-            (normal, normal, difficult, difficult, difficult, normal, normal, normal),
-            (normal, normal, difficult, difficult, difficult, normal, normal, normal),
-        ),
-    )
-
-
-def _obstacle_corridor_map() -> GridMap:
-    normal = TerrainType.NORMAL
-    blocked = TerrainType.BLOCKED
-    low = TerrainType.LOW_COVER
-    return GridMap(
-        width=9,
-        height=5,
-        terrain_grid=(
-            (normal, normal, normal, blocked, normal, blocked, normal, normal, normal),
-            (normal, low, normal, blocked, normal, blocked, normal, low, normal),
-            (normal, normal, normal, normal, normal, normal, normal, normal, normal),
-            (normal, low, normal, blocked, normal, blocked, normal, low, normal),
-            (normal, normal, normal, blocked, normal, blocked, normal, normal, normal),
-        ),
-    )
+        raise ValueError("Map has not enough configured spawn cells.")
+    return list(positions[:count])
 
 
 def _format_summary(

@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 import json
 import re
 from typing import Any
 
+from combat.action_economy import ActionEconomy
+from combat.class_features import Resource
 from combat.common_actions import (
     ActionResult,
     ActionSurgeAction,
@@ -32,8 +35,10 @@ from combat.common_actions import (
     StabilizeAction,
     UseObjectAction,
 )
+from combat.map import GridMap
 from combat.items import ItemActionCost, normalize_action_cost
-from combat.models import Character, CombatState, Position
+from combat.models import Character, CombatState, Condition, Position, Stats, Team
+from combat.terrain import coerce_terrain_type
 
 
 REPLAY_FORMAT = "BattleReplay"
@@ -41,6 +46,23 @@ REPLAY_VERSION = 1
 
 
 StateSnapshot = dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ReplaySummary:
+    """Compact metadata displayed by GUI replay lists."""
+
+    path: Path
+    display_name: str
+    modified_at: str
+    winner: str | None
+    round_count: int
+    participants: tuple[str, ...]
+    step_count: int
+
+
+class ReplayLoadError(ValueError):
+    """Raised when a replay JSON cannot be loaded or validated."""
 
 
 @dataclass
@@ -98,6 +120,323 @@ class BattleReplay:
             encoding="utf-8",
         )
         return replay_path
+
+
+def load_replay_file(path: str | Path) -> dict[str, Any]:
+    """Load and minimally validate a BattleReplay JSON payload."""
+
+    replay_path = Path(path)
+    try:
+        payload = json.loads(replay_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ReplayLoadError(f"Cannot load replay {replay_path}: {error}") from error
+    validate_replay_payload(payload)
+    return payload
+
+
+def validate_replay_payload(payload: dict[str, Any]) -> None:
+    """Validate the structural fields needed by replay viewers."""
+
+    if not isinstance(payload, dict):
+        raise ReplayLoadError("Replay payload must be a JSON object.")
+    if payload.get("format") != REPLAY_FORMAT:
+        raise ReplayLoadError(f"Unsupported replay format: {payload.get('format')!r}")
+    if not isinstance(payload.get("steps"), list):
+        raise ReplayLoadError("Replay JSON must contain a steps list.")
+
+
+def list_replay_summaries(directory: str | Path = "replays") -> list[ReplaySummary]:
+    """Return summaries for all replay JSON files in a directory."""
+
+    replay_dir = Path(directory)
+    if not replay_dir.exists():
+        return []
+    summaries: list[ReplaySummary] = []
+    for path in sorted(
+        replay_dir.glob("*.json"),
+        key=lambda item: item.stat().st_mtime,
+        reverse=True,
+    ):
+        try:
+            payload = load_replay_file(path)
+        except ReplayLoadError:
+            continue
+        summaries.append(replay_summary(path, payload))
+    return summaries
+
+
+def replay_summary(path: str | Path, payload: dict[str, Any]) -> ReplaySummary:
+    """Build display metadata for one replay payload."""
+
+    replay_path = Path(path)
+    steps = payload.get("steps") or []
+    metadata = payload.get("metadata") or {}
+    display_name = str(metadata.get("summary") or metadata.get("name") or replay_path.stem)
+    winner = payload.get("winner")
+    if winner is None and steps:
+        winner = steps[-1].get("winner")
+    rounds = [
+        int(step.get("round", 0))
+        for step in steps
+        if isinstance(step, dict) and _is_int_like(step.get("round", 0))
+    ]
+    participants = _participants_from_steps(steps)
+    modified_at = ""
+    try:
+        modified_at = datetime.fromtimestamp(replay_path.stat().st_mtime).strftime(
+            "%Y-%m-%d %H:%M"
+        )
+    except OSError:
+        modified_at = ""
+    return ReplaySummary(
+        path=replay_path,
+        display_name=display_name,
+        modified_at=modified_at,
+        winner=str(winner) if winner is not None else None,
+        round_count=max(rounds, default=0),
+        participants=participants,
+        step_count=len(steps),
+    )
+
+
+def replay_step_to_state(step: dict[str, Any]) -> CombatState:
+    """Convert one saved replay step into a minimal CombatState for GUI drawing."""
+
+    characters = _characters_from_step(step)
+    state = CombatState(
+        characters=characters,
+        grid_map=_grid_map_from_step(step),
+        round_number=int(step.get("round", 1) or 1),
+        initiative_order=_initiative_ids(step),
+        current_turn_index=0,
+        turn_index=0,
+    )
+    actor_id = int((step.get("actor") or {}).get("id", 0) or 0)
+    if state.initiative_order and actor_id in state.initiative_order:
+        state.current_turn_index = state.initiative_order.index(actor_id)
+        state.turn_index = actor_id
+    elif state.characters:
+        state.turn_index = min(max(actor_id, 0), len(state.characters) - 1)
+    return state
+
+
+def _participants_from_steps(steps: list[Any]) -> tuple[str, ...]:
+    if not steps:
+        return ()
+    first_step = steps[0] if isinstance(steps[0], dict) else {}
+    hp_values = first_step.get("hp_values") or {}
+    names = [
+        str(payload.get("name"))
+        for _, payload in sorted(
+            hp_values.items(),
+            key=lambda item: int(item[0]) if str(item[0]).isdigit() else str(item[0]),
+        )
+        if isinstance(payload, dict) and payload.get("name")
+    ]
+    if names:
+        return tuple(names)
+    positions = first_step.get("positions") or {}
+    return tuple(
+        str(payload.get("name"))
+        for _, payload in sorted(
+            positions.items(),
+            key=lambda item: int(item[0]) if str(item[0]).isdigit() else str(item[0]),
+        )
+        if isinstance(payload, dict) and payload.get("name")
+    )
+
+
+def _characters_from_step(step: dict[str, Any]) -> list[Character]:
+    ids = _character_ids_from_step(step)
+    teams = _team_map_from_step(step)
+    characters: list[Character] = []
+    for character_id in ids:
+        key = str(character_id)
+        position_payload = (step.get("positions") or {}).get(key, {})
+        hp_payload = (step.get("hp_values") or {}).get(key, {})
+        resource_payload = (step.get("resources") or {}).get(key, {})
+        condition_payload = (step.get("conditions") or {}).get(key, {})
+        name = str(
+            hp_payload.get("name")
+            or position_payload.get("name")
+            or resource_payload.get("name")
+            or f"Creature {character_id}"
+        )
+        hp = int(hp_payload.get("hp", 0) or 0)
+        max_hp = int(hp_payload.get("max_hp", max(1, hp)) or max(1, hp))
+        movement = int(
+            (resource_payload.get("action_economy") or {}).get("movement_remaining", 0)
+            or 0
+        )
+        character = Character(
+            name=name,
+            hp=hp,
+            max_hp=max(1, max_hp),
+            ac=int(hp_payload.get("ac", position_payload.get("ac", 10)) or 10),
+            position=_position_from_payload_safe(position_payload),
+            speed=max(1, movement),
+            stats=Stats(),
+            team=teams.get(
+                character_id,
+                Team.PLAYERS if character_id == 0 else Team.ENEMIES,
+            ),
+        )
+        character.conditions = [
+            Condition(
+                name=str(condition.get("name", "condition")),
+                duration_rounds=condition.get("duration_rounds"),
+                description=str(condition.get("description", "")),
+            )
+            for condition in condition_payload.get("conditions", [])
+            if isinstance(condition, dict)
+        ]
+        _apply_condition_flags(character, condition_payload.get("flags") or {})
+        character.resources = {
+            str(name): Resource(str(name), max(0, int(value or 0)), int(value or 0))
+            for name, value in (resource_payload.get("class_resources") or {}).items()
+        }
+        character.spell_slots = {
+            int(level): int(value or 0)
+            for level, value in (resource_payload.get("spell_slots") or {}).items()
+            if _is_int_like(level)
+        }
+        character.spell_slots_remaining = {
+            int(level): int(value or 0)
+            for level, value in (resource_payload.get("spell_slots_remaining") or {}).items()
+            if _is_int_like(level)
+        }
+        _apply_action_economy(
+            character.action_economy,
+            resource_payload.get("action_economy") or {},
+        )
+        if not bool(hp_payload.get("alive", hp > 0)):
+            character.hp = min(character.hp, 0)
+        characters.append(character)
+    return characters
+
+
+def _grid_map_from_step(step: dict[str, Any]) -> GridMap | None:
+    metadata = step.get("map_metadata") or {}
+    width = int(metadata.get("width", 0) or 0)
+    height = int(metadata.get("height", 0) or 0)
+    if width <= 0 or height <= 0:
+        positions = step.get("positions") or {}
+        if not positions:
+            return None
+        width = max(int(position.get("x", 0)) for position in positions.values()) + 1
+        height = max(int(position.get("y", 0)) for position in positions.values()) + 1
+    terrain_snapshot = metadata.get("terrain_snapshot")
+    terrain_grid = None
+    if isinstance(terrain_snapshot, list):
+        terrain_grid = tuple(
+            tuple(coerce_terrain_type(cell) for cell in row)
+            for row in terrain_snapshot
+            if isinstance(row, list)
+        )
+    return GridMap(width=width, height=height, terrain_grid=terrain_grid)
+
+
+def _character_ids_from_step(step: dict[str, Any]) -> list[int]:
+    ids: set[int] = set()
+    for key in (step.get("positions") or {}):
+        if _is_int_like(key):
+            ids.add(int(key))
+    for key in (step.get("hp_values") or {}):
+        if _is_int_like(key):
+            ids.add(int(key))
+    for item in step.get("initiative_order") or []:
+        if isinstance(item, dict) and _is_int_like(item.get("id")):
+            ids.add(int(item["id"]))
+    return sorted(ids)
+
+
+def _team_map_from_step(step: dict[str, Any]) -> dict[int, Team]:
+    teams: dict[int, Team] = {}
+    actor = step.get("actor") or {}
+    if _is_int_like(actor.get("id")) and step.get("actor_team") is not None:
+        teams[int(actor["id"])] = _team_from_value(step.get("actor_team"))
+    for target in step.get("targets") or []:
+        if (
+            isinstance(target, dict)
+            and _is_int_like(target.get("id"))
+            and target.get("team") is not None
+        ):
+            teams[int(target["id"])] = _team_from_value(target.get("team"))
+    for death in step.get("deaths") or []:
+        if (
+            isinstance(death, dict)
+            and _is_int_like(death.get("id"))
+            and death.get("team") is not None
+        ):
+            teams[int(death["id"])] = _team_from_value(death.get("team"))
+    for character_id, payload in (step.get("positions") or {}).items():
+        if (
+            _is_int_like(character_id)
+            and isinstance(payload, dict)
+            and payload.get("team") is not None
+        ):
+            teams[int(character_id)] = _team_from_value(payload.get("team"))
+    for character_id, payload in (step.get("hp_values") or {}).items():
+        if (
+            _is_int_like(character_id)
+            and isinstance(payload, dict)
+            and payload.get("team") is not None
+        ):
+            teams[int(character_id)] = _team_from_value(payload.get("team"))
+    return teams
+
+
+def _initiative_ids(step: dict[str, Any]) -> list[int]:
+    ids = []
+    for item in step.get("initiative_order") or []:
+        if isinstance(item, dict) and _is_int_like(item.get("id")):
+            ids.append(int(item["id"]))
+        elif _is_int_like(item):
+            ids.append(int(item))
+    return ids
+
+
+def _position_from_payload_safe(payload: dict[str, Any]) -> Position:
+    return Position(int(payload.get("x", 0) or 0), int(payload.get("y", 0) or 0))
+
+
+def _team_from_value(value: object) -> Team:
+    normalized = str(value).strip().casefold()
+    if normalized in {Team.PLAYERS.value, "player", "ally", "allies"}:
+        return Team.PLAYERS
+    return Team.ENEMIES
+
+
+def _apply_condition_flags(character: Character, flags: dict[str, Any]) -> None:
+    character.prone = bool(flags.get("prone", False))
+    character.grappled = bool(flags.get("grappled", False))
+    character.hidden = bool(flags.get("hidden", False))
+    character.dodging_until_start_of_next_turn = bool(flags.get("dodging", False))
+    character.disengaged_until_end_of_turn = bool(flags.get("disengaged", False))
+    character.stable = bool(flags.get("stable", False))
+
+
+def _apply_action_economy(action_economy: ActionEconomy, payload: dict[str, Any]) -> None:
+    action_economy.action_available = bool(payload.get("action_available", True))
+    action_economy.bonus_action_available = bool(payload.get("bonus_action_available", True))
+    action_economy.reaction_available = bool(payload.get("reaction_available", True))
+    action_economy.movement_remaining = int(payload.get("movement_remaining", 0) or 0)
+    action_economy.free_object_interaction_available = bool(
+        payload.get("free_object_interaction_available", True)
+    )
+    action_economy.reaction_used_this_round = bool(
+        payload.get("reaction_used_this_round", False)
+    )
+    action_economy.prepared_action = payload.get("prepared_action")
+    action_economy.trigger_description = payload.get("trigger_description")
+
+
+def _is_int_like(value: object) -> bool:
+    try:
+        int(value)
+    except (TypeError, ValueError):
+        return False
+    return True
 
 
 def _build_step(
@@ -271,6 +610,7 @@ def _positions(snapshot: StateSnapshot) -> dict[str, dict[str, Any]]:
     return {
         str(character["id"]): {
             "name": character["name"],
+            "team": character["team"],
             **character["position"],
         }
         for character in snapshot["characters"]
@@ -281,8 +621,10 @@ def _hp_values(snapshot: StateSnapshot) -> dict[str, dict[str, Any]]:
     return {
         str(character["id"]): {
             "name": character["name"],
+            "team": character["team"],
             "hp": character["hp"],
             "max_hp": character["max_hp"],
+            "ac": character["ac"],
             "alive": character["alive"],
         }
         for character in snapshot["characters"]

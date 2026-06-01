@@ -1,0 +1,16 @@
+{
+  "name": "cover_arena",
+  "width": 8,
+  "height": 5,
+  "terrain_grid": [
+    ["NORMAL", "NORMAL", "NORMAL", "NORMAL", "NORMAL", "LOW_COVER", "NORMAL", "NORMAL"],
+    ["NORMAL", "LOW_COVER", "NORMAL", "NORMAL", "NORMAL", "NORMAL", "LOW_COVER", "NORMAL"],
+    ["NORMAL", "NORMAL", "NORMAL", "HIGH_COVER", "NORMAL", "NORMAL", "NORMAL", "NORMAL"],
+    ["NORMAL", "LOW_COVER", "NORMAL", "NORMAL", "NORMAL", "NORMAL", "LOW_COVER", "NORMAL"],
+    ["NORMAL", "NORMAL", "NORMAL", "NORMAL", "NORMAL", "LOW_COVER", "NORMAL", "NORMAL"]
+  ],
+  "spawn_zones": {
+    "players": [[0, 1], [0, 2], [0, 3], [1, 0]],
+    "enemies": [[7, 1], [7, 2], [7, 3], [6, 0]]
+  }
+}

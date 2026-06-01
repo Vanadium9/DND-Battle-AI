@@ -1,7 +1,14 @@
 from pathlib import Path
 
 from combat import Team
-from scripts.train_ppo import aggregate_action_distribution, format_report
+from agents import GNNPPOActorCritic, PPOActorCritic
+from scripts.train_ppo import (
+    aggregate_action_distribution,
+    build_model,
+    default_checkpoint_for_model,
+    format_report,
+    resolve_device,
+)
 from training import EpisodeStats
 
 
@@ -60,3 +67,18 @@ def test_format_report_includes_training_metrics() -> None:
     assert "average_episode_length=4.00" in report
     assert "action_distribution=" in report
     assert "checkpoint=model.pt" in report
+
+
+def test_default_checkpoint_matches_selected_model_type() -> None:
+    assert default_checkpoint_for_model("gnn").name == "gnn_ppo_actor_critic.pt"
+    assert default_checkpoint_for_model("mlp").name == "ppo_actor_critic.pt"
+
+
+def test_build_model_uses_selected_architecture() -> None:
+    assert isinstance(build_model("gnn"), GNNPPOActorCritic)
+    assert isinstance(build_model("mlp"), PPOActorCritic)
+
+
+def test_resolve_device_auto_returns_available_torch_device() -> None:
+    assert resolve_device("auto").type in {"cpu", "cuda"}
+    assert resolve_device("cpu").type == "cpu"
