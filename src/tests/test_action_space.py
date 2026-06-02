@@ -15,12 +15,14 @@ from agents import (
 from combat import (
     ActionSurgeAction,
     AttackAction,
+    CastSpellAction,
     CombatState,
     DashAction,
     EndTurnAction,
     FighterArcher,
     FighterChampionGreatsword,
     FighterLevel1Basic,
+    FireElementalSimple,
     Goblin,
     GridMap,
     MoveAction,
@@ -67,6 +69,7 @@ def test_build_action_masks_for_active_actor() -> None:
         "move_index",
         "target_cell_index",
         "direction_index",
+        "slot_level",
         "option_index",
     }
     assert masks["action_category"].dtype == torch.bool
@@ -269,6 +272,62 @@ def test_decode_action_returns_concrete_combat_actions() -> None:
     assert isinstance(end_turn_action, EndTurnAction)
     assert isinstance(bonus_action, SecondWindAction)
     assert isinstance(class_feature_action, ActionSurgeAction)
+
+
+def test_decode_cast_spell_uses_selected_slot_level_for_upcast() -> None:
+    state = CombatState(
+        characters=[
+            WizardEvoker(Position(0, 0)),
+            Goblin(Position(3, 0)),
+        ],
+        grid_map=GridMap(width=6, height=5),
+    )
+    masks = build_action_masks(state, actor_id=0)
+
+    action = decode_action(
+        ActionCategory.MAIN_ACTION,
+        MainActionType.CAST_SPELL,
+        target_index=1,
+        move_index=0,
+        option_index=2,
+        state=state,
+        actor_id=0,
+        slot_level=3,
+        masks=masks,
+    )
+
+    assert isinstance(action, CastSpellAction)
+    assert action.spell is not None
+    assert action.spell.name == "Magic Missile"
+    assert action.cast_level == 3
+
+
+def test_spell_options_mask_immune_damage_when_better_damage_type_exists() -> None:
+    state = CombatState(
+        characters=[
+            WizardEvoker(Position(0, 2)),
+            FireElementalSimple(Position(5, 2)),
+        ],
+        grid_map=GridMap(width=6, height=5),
+    )
+
+    masks = build_action_masks(state, actor_id=0)
+
+    assert masks["main_action_type"][MainActionType.CAST_SPELL]
+    action = decode_action(
+        ActionCategory.MAIN_ACTION,
+        MainActionType.CAST_SPELL,
+        target_index=1,
+        move_index=0,
+        option_index=0,
+        state=state,
+        actor_id=0,
+        masks=masks,
+    )
+
+    assert isinstance(action, CastSpellAction)
+    assert action.spell is not None
+    assert action.spell.name in {"Ray of Frost", "Magic Missile"}
 
 
 def test_decode_action_rejects_masked_components() -> None:

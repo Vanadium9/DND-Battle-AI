@@ -9,7 +9,7 @@ import torch
 from torch import nn
 from torch.distributions import Categorical
 
-from agents.action_space import ACTION_CATEGORY_COUNT, MAIN_ACTION_TYPE_COUNT, MIN_OPTION_COUNT
+from agents.action_space import ACTION_CATEGORY_COUNT, MAIN_ACTION_TYPE_COUNT
 from agents.entity_observation import EntityObservation
 from agents.gnn_encoder import CombatGNNEncoder
 from agents.observation import (

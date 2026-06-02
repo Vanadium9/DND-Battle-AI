@@ -2905,3 +2905,100 @@ ROADMAP должен обновиться:
 - выводить активный curriculum level при запуске
 - печатать curriculum transition в training log
 - сохранить random training как режим по умолчанию, если `--curriculum` не указан
+
+## 80. Запрос: Исправить падение curriculum training на option_index mask
+
+Проблема:
+- при переходе curriculum к более сложным уровням обучение падало с:
+  - `ValueError: option_index mask is larger than the model head`
+- причина:
+  - Wizard/Evoker stages создают `option_index` mask размера 10
+  - дефолтная PPO/GNN модель создавалась с `option_count=8`
+
+Требования:
+- увеличить дефолтный `option_count` модели так, чтобы он покрывал supported curriculum action options
+- не обрезать mask, потому что это скрывает легальные spell/item/weapon options
+- добавить regression test:
+  - модель из `scripts/train_ppo.py build_model("gnn")` должна покрывать максимальный `option_index` среди всех curriculum stages
+- проверить smoke-запуск curriculum level с Wizard
+
+## 81. Запрос: Исправить full training без завершённых эпизодов и resume checkpoint
+
+Проблемы:
+- при `num_envs=16`, `rollout_steps=1024`, `max_episode_steps=256` в full training были:
+  - `episodes_finished=0`
+  - `timeouts=0`
+  - деградация reward/entropy
+- причина:
+  - `episode_steps` хранился локально внутри `collect_rollout`
+  - между PPO update-ами счётчик шагов эпизода сбрасывался
+  - env никогда не доходил до timeout, если один rollout давал меньше шагов на env, чем `max_episode_steps`
+- вторая проблема:
+  - `scripts/train_ppo.py` создавал новую модель и не загружал существующий checkpoint перед продолжением обучения
+
+Требования:
+- хранить `episode_steps_by_env` как состояние `PPOTrainer`
+- сохранять счётчики между `collect_rollout` вызовами
+- сбрасывать счётчик только при завершении/timeout/reset конкретного env
+- добавить `--no-resume` для явного старта с новой модели
+- по умолчанию пытаться загрузить совместимый checkpoint
+- восстанавливать model state, optimizer state и curriculum level/state из checkpoint
+- если checkpoint несовместим, стартовать fresh и явно указать статус в логе
+- добавить regression tests для persistent timeout и checkpoint resume
+
+## 82. Запрос: Обновить README и ROADMAP под актуальное обучение и GUI
+
+Требования:
+- восстановить/обновить `README.md`, если файл отсутствует или помечен как удалённый
+- переписать `ROADMAP.md` в нормальной русской кодировке
+- зафиксировать актуальное состояние проекта:
+  - PySide6 GUI для персонажей, боёв, карт и реплеев
+  - обучение модели только через CLI, без запуска обучения из GUI
+  - фиксированная GNN PPO policy для GUI inference
+  - curriculum training, fast warm-up, multi-env rollouts и checkpoint resume
+  - persistent `max_episode_steps` timeouts между PPO update-ами
+- добавить рекомендуемые команды:
+  - быстрый warm-up с `--fast-action-masks`, `--fast-observation`, `--num-envs`, `--no-resume`
+  - полное дообучение без fast-флагов
+- пояснить:
+  - `--num-envs`
+  - `--no-resume`
+  - `checkpoint_status`
+  - что `win_rate` относится к победам команды игроков
+  - что fast-режимы не должны заменять финальное обучение
+- обновить roadmap по направлениям:
+  - GUI
+  - combat/rules
+  - training/evaluation
+  - performance
+  - data storage
+
+## 83. Запрос: Исправить обучение wizard/elemental stage и подключить slot level
+
+Проблемы:
+- на curriculum level 8 `Wizard vs FireElementalSimple` win_rate падал почти до нуля
+- spellcasting в целом работал, но:
+  - FireElementalSimple имеет `FIRE immunity`
+  - Fireball, Fire Bolt, Scorching Ray наносили 0 урона
+  - Magic Missile и Ray of Frost наносили урон
+- `GNNPPOActorCritic` имел `slot_level_head`, но:
+  - `decode_action(...)` не принимал `slot_level`
+  - `PPOTrainer._decode_model_action(...)` отбрасывал `slot_level`
+  - upcast через PPO/GNN фактически не использовался
+- общий `option_index` пересекался между main spell, reaction spell, item/weapon options, поэтому одна mask не могла идеально запретить Fire Bolt, если Shield reaction использовал тот же index
+
+Требования:
+- добавить `slot_level` mask в `build_action_masks`
+- передавать `slot_level` из PPO/GNN output в `decode_action`
+- передавать `cast_level` в `CastSpellAction`
+- для spellcasting декодера:
+  - если выбранный spell option бесполезен из-за immunity и есть Force/Cold альтернатива, выбирать первый валидный spell option
+  - если выбранная цель/клетка/направление невалидны, выбирать первый валидный вариант для выбранного spell
+- обновить GUI/evaluation inference decode, чтобы они тоже передавали `slot_level`
+- смягчить curriculum level 8:
+  - вместо одиночного Wizard vs FireElementalSimple использовать Wizard + Fighter vs FireElementalSimple
+  - evaluation scenario оставить жёстким
+- добавить regression tests:
+  - Magic Missile декодируется с upcast slot level 3
+  - fire spell против FireElementalSimple remap-ится на Ray of Frost или Magic Missile при наличии альтернативы
+- прогнать полный pytest

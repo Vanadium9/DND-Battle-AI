@@ -72,11 +72,18 @@ def main() -> None:
         profile_rollout=args.profile_training,
         num_envs=args.num_envs,
     )
+    checkpoint_status = load_checkpoint_for_training(
+        trainer,
+        checkpoint_path,
+        resume=not args.no_resume,
+        restore_curriculum=args.curriculum_level is None,
+    )
     print(
         f"training model_type={args.model_type} device={trainer.device} "
         f"num_envs={trainer.num_envs} "
         f"curriculum={trainer.curriculum_config.enabled} "
         f"curriculum_level={trainer.curriculum_level} "
+        f"checkpoint_status={checkpoint_status} "
         f"checkpoint={checkpoint_path}",
         flush=True,
     )
@@ -223,6 +230,11 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="Start from a fresh model even if the checkpoint file already exists.",
+    )
+    parser.add_argument(
         "--model-type",
         choices=("mlp", "gnn"),
         default="gnn",
@@ -323,6 +335,65 @@ def build_model(model_type: str) -> torch.nn.Module:
     if model_type == "gnn":
         return GNNPPOActorCritic()
     return PPOActorCritic(target_count=6, move_count=64)
+
+
+def load_checkpoint_for_training(
+    trainer: PPOTrainer,
+    checkpoint_path: Path,
+    *,
+    resume: bool = True,
+    restore_curriculum: bool = True,
+) -> str:
+    """Load a compatible checkpoint into the trainer, if requested and available."""
+
+    if not resume:
+        return "fresh_requested"
+    if not checkpoint_path.exists():
+        return "fresh_missing"
+    try:
+        checkpoint = torch.load(checkpoint_path, map_location=trainer.device, weights_only=False)
+        trainer.model.load_state_dict(checkpoint["model_state_dict"])
+    except Exception as exc:
+        return f"fresh_incompatible:{type(exc).__name__}"
+
+    optimizer_status = "optimizer_loaded"
+    optimizer_state = checkpoint.get("optimizer_state_dict")
+    if optimizer_state is not None:
+        try:
+            trainer.optimizer.load_state_dict(optimizer_state)
+        except Exception:
+            optimizer_status = "optimizer_fresh"
+    else:
+        optimizer_status = "optimizer_missing"
+
+    if restore_curriculum and trainer.curriculum_config.enabled:
+        _restore_curriculum_state(trainer, checkpoint)
+        for env_index in range(len(trainer.environments)):
+            trainer._reset_environment_for_episode(env_index)
+    return f"loaded:{optimizer_status}"
+
+
+def _restore_curriculum_state(
+    trainer: PPOTrainer,
+    checkpoint: dict[str, object],
+) -> None:
+    curriculum_level = checkpoint.get("curriculum_level")
+    if curriculum_level is not None:
+        trainer.current_curriculum_level = min(
+            trainer.curriculum_config.max_level,
+            max(1, int(curriculum_level)),
+        )
+        if trainer.encounter_generator is not None:
+            trainer.encounter_generator.set_curriculum_level(trainer.current_curriculum_level)
+
+    curriculum_state = checkpoint.get("curriculum_state")
+    if isinstance(curriculum_state, dict):
+        recent_wins = curriculum_state.get("recent_wins", [])
+        if isinstance(recent_wins, list):
+            trainer.curriculum_recent_wins = [bool(value) for value in recent_wins]
+        transition_log = curriculum_state.get("transition_log", [])
+        if isinstance(transition_log, list):
+            trainer.curriculum_transition_log = [str(value) for value in transition_log]
 
 
 def format_report(

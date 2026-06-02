@@ -473,6 +473,7 @@ def _decode_model_action(
             int(model_action["option_index"].item()),
             state,
             actor_id,
+            slot_level=int(model_action.get("slot_level", torch.tensor(0)).item()),
         ), False
     except ValueError:
         return EndTurnAction(actor_id=actor_id), True

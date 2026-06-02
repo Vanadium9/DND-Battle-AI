@@ -122,6 +122,18 @@ def test_collect_rollout_resets_episode_on_step_timeout() -> None:
     assert any(rollout.dones)
 
 
+def test_episode_step_timeout_persists_across_rollouts() -> None:
+    trainer = make_trainer(rollout_steps=1)
+
+    first = trainer.collect_rollout(max_episode_steps=2)
+    second = trainer.collect_rollout(max_episode_steps=2)
+
+    assert first.episode_timeouts == 0
+    assert second.episode_timeouts == 1
+    assert second.dones[-1] is True
+    assert trainer.episode_steps_by_env[0] == 0
+
+
 def test_collect_rollout_supports_fast_masks_and_profile_timings() -> None:
     trainer = make_trainer(rollout_steps=4)
     trainer.fast_action_masks = True

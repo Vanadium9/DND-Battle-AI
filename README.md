@@ -1,161 +1,118 @@
 # D&D Battle AI
 
-Python-проект для D&D-like 5e tactical combat simulator с RL/PPO/GNN-инфраструктурой и desktop GUI на PySide6.
+D&D Battle AI - учебный проект тактического пошагового боя в стиле D&D-like 5e с агентом обучения с подкреплением. Проект реализует ограниченный ruleset `srd5e_minimal_2014`: цель - корректная работа боевого AI, action economy, карты и тактических решений, а не полная цифровая копия D&D.
 
-Цель проекта - корректная работа боевого AI в пошаговых тактических боях, а не полная цифровая копия D&D. Правила реализуют ограниченное подмножество D&D-like 5e: уровни 1-5, классы Fighter/Cleric/Wizard, базовые расы, common combat actions, карты, spellcasting, ресурсы, предметы, реплеи и evaluation/training scripts.
+## Возможности
 
-## Структура
-
-```text
-src/
-  agents/      observation encoders, action space, PPO/GNN models, baselines
-  combat/      combat engine, actions, maps, rewards, replay, presets
-  rules/       ruleset registry, classes, races, feats, progression
-  training/    PPO, multi-agent, curriculum, self-play
-  ui/          PySide6 desktop GUI
-configs/       ruleset and training configs
-data/
-  characters/  saved GUI characters
-maps/          JSON map configs
-replays/       saved battle replays
-checkpoints/   trained model checkpoints
-scripts/       CLI entry points
-```
+- Пошаговый `CombatEnvironment` с инициативой, раундами, action/bonus action/reaction и movement.
+- Общие боевые действия: Attack, CastSpell, Dash, Disengage, Dodge, Help, Hide, Search, UseObject, Ready, Grapple, Shove, Stabilize, EndTurn.
+- Поддержанные классы 1-5 уровней: Fighter, Cleric, Wizard.
+- Поддержанные подклассы: Champion, Life Domain, School of Evocation.
+- Поддержанные расы: Human, Dwarf, Elf, Halfling.
+- Карты с terrain cost, obstacles, cover и line of sight.
+- Damage types, resistances, immunities, vulnerabilities.
+- Entity-based observation, GNN encoder и PPO Actor-Critic модель.
+- Curriculum training, fast warm-up режимы, multi-env rollout batching и checkpoint resume.
+- PySide6 desktop GUI для демонстрации боёв, персонажей и реплеев.
 
 ## Установка
 
-```bash
+```powershell
 python -m venv .venv
-pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-На Windows из локального venv:
+Если PyTorch был установлен отдельно под CUDA, используйте ту же виртуальную среду. Проверить CUDA можно так:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')"
 ```
 
 ## Запуск GUI
 
-```bash
-python scripts/run_gui.py
+```powershell
+.\.venv\Scripts\python.exe scripts\run_gui.py
 ```
 
-GUI сделан как отдельный PySide6-слой поверх существующего combat engine. В GUI можно:
+В GUI можно:
 
-- просматривать сохранённых персонажей;
-- создавать и редактировать персонажей через ruleset-aware character builder;
+- просматривать созданных персонажей;
+- создавать и редактировать персонажей;
 - запускать случайный бой;
-- настраивать кастомный бой и выбирать карту;
-- вручную расставлять персонажей и врагов в рамках custom battle flow по мере развития редактора боя;
+- настраивать кастомный бой;
+- вручную расставлять персонажей и врагов;
 - смотреть пошаговый бой на клеточной карте;
-- вручную управлять персонажами в поддержанном режиме боя;
-- смотреть сохранённые реплеи;
-- использовать преднастроенную политику PPO Actor-Critic с GNN encoder;
-- автоматически переходить на внутренний fallback agent, если фиксированный checkpoint недоступен.
+- вручную управлять персонажами в поддержанном режиме;
+- смотреть реплеи;
+- использовать обученную GNN PPO policy для инференса.
 
-GUI не даёт пользователю выбирать `model_type`, checkpoint, fallback agent и служебные папки, чтобы демонстрационный режим не ломался из-за несовместимой конфигурации.
+Обучение модели из GUI не запускается. GUI использует уже существующий checkpoint или fallback agent, если checkpoint недоступен.
 
-Обучение модели НЕ запускается из GUI. Обучение остаётся в существующих CLI scripts, например:
+## Обучение
 
-```bash
-python scripts/train_ppo.py --episodes 100 --seed 0 --checkpoint checkpoints/ppo_actor_critic.pt
+Обучение запускается только через CLI-скрипты. Актуальная модель по умолчанию сохраняется в:
+
+```text
+checkpoints/gnn_ppo_actor_critic.pt
 ```
 
-## Важные папки
+По умолчанию `scripts/train_ppo.py` пытается продолжить совместимый checkpoint. Для свежего старта используйте `--no-resume`.
 
-- `data/characters/` - JSON-файлы персонажей, созданных в GUI.
-- `replays/` - BattleReplay JSON, сохранённые из демо или GUI.
-- `maps/` - JSON-конфигурации карт: terrain grid и spawn zones.
-- `checkpoints/` - сохранённые PPO/GNN checkpoints для инференса и обучения.
+Быстрый warm-up до сложных сценариев:
 
-## Карты
-
-Карты задаются JSON-файлами в `maps/`. Конфиг содержит:
-
-- `name`
-- `width`
-- `height`
-- `terrain_grid`
-- `spawn_zones.players`
-- `spawn_zones.enemies`
-
-Поддержанные terrain values:
-
-- `NORMAL`
-- `DIFFICULT_TERRAIN`
-- `BLOCKED`
-- `LOW_COVER`
-- `HIGH_COVER`
-
-В комплекте есть:
-
-- `open_field.json`
-- `cover_arena.json`
-- `difficult_terrain_pass.json`
-- `obstacle_corridor.json`
-
-## Ruleset
-
-Активный ruleset: `srd5e_minimal_2014`.
-
-Поддержано:
-
-- уровни 1-5;
-- классы: Fighter, Cleric, Wizard;
-- подклассы: Champion, Life Domain, School of Evocation;
-- расы: Human, Dwarf, Elf, Halfling;
-- spell levels 0-3;
-- common actions: Attack, CastSpell, Dash, Disengage, Dodge, Help, Hide, Search, UseObject, Ready, Grapple, Shove, Stabilize, EndTurn.
-
-Классы добавляют features/resources, но не владеют общей логикой Attack/Dash/Dodge/etc. Базовые боевые действия реализованы отдельно от классов. Сложные бонусные действия классов и расширенный контент добавляются постепенно.
-
-## CLI
-
-Тестовый demo:
-
-```bash
-python scripts/run_demo.py
+```powershell
+.\.venv\Scripts\python.exe scripts\train_ppo.py --updates 300 --rollout-steps 1024 --max-episode-steps 128 --minibatch-size 256 --update-epochs 4 --model-type gnn --device auto --num-envs 16 --fast-action-masks --fast-observation --curriculum --curriculum-max-level 6 --curriculum-window-size 80 --curriculum-threshold 0.85 --profile-training --log-interval 5 --no-resume
 ```
 
-Сохранить replay из demo:
+Полное дообучение на более богатых observation/masks:
 
-```bash
-python scripts/run_demo.py --save-replay
+```powershell
+.\.venv\Scripts\python.exe scripts\train_ppo.py --updates 150 --rollout-steps 1024 --max-episode-steps 128 --minibatch-size 256 --update-epochs 4 --model-type gnn --device auto --num-envs 16 --curriculum --curriculum-level 7 --curriculum-max-level 13 --log-interval 5
 ```
 
-Консольный просмотр replay:
+Важные параметры:
 
-```bash
-python scripts/view_replay_console.py replays/example.json
+- `--device auto` использует CUDA, если доступна.
+- `--num-envs` задаёт число независимых combat environments в одном rollout tick. Это не отдельные процессы, а способ собирать batch для GPU эффективнее.
+- `--max-episode-steps` ограничивает длину боя. Счётчик шагов сохраняется между PPO update-ами, поэтому зависшие бои должны завершаться timeout.
+- `--fast-action-masks` и `--fast-observation` ускоряют warm-up, но скрывают часть тактических признаков. Для финального обучения и оценки их лучше отключать.
+- `win_rate` считается как доля завершённых побед команды игроков среди завершённых эпизодов. Timeout не считается победой.
+- `checkpoint_status` в стартовом логе показывает, был ли checkpoint загружен или обучение началось fresh.
+
+## Оценка
+
+```powershell
+.\.venv\Scripts\python.exe scripts\evaluate_policy.py --by-level
 ```
 
-Оценка политики:
+Evaluation scenarios покрывают уровни 1-5, одиночные и партийные бои, разные карты, врагов с resistances/immunities и сценарии для Fighter, Cleric, Wizard.
 
-```bash
-python scripts/evaluate_policy.py --by-level
-```
+## Структура проекта
+
+- `src/combat/` - combat engine, действия, карты, урон, spellcasting, replay.
+- `src/rules/` - ruleset registry, progression, classes, subclasses, races, feats, XP.
+- `src/agents/` - observation encoders, action space, PPO/GNN models, rule-based agents.
+- `src/training/` - PPO trainer, curriculum, multi-agent и self-play заготовки.
+- `src/ui/` - PySide6 GUI.
+- `src/character/` - внутренний формат персонажей, validation, repository.
+- `scripts/` - CLI entrypoints для обучения, evaluation, GUI и replay viewer.
+- `configs/` - ruleset/training конфиги.
+- `maps/` - JSON-карты.
+- `data/characters/` - сохранённые персонажи GUI.
+- `replays/` - сохранённые replay JSON.
+- `checkpoints/` - обученные модели.
+
+## Ограничения
+
+- Реализовано ограниченное подмножество D&D-like 5e, а не весь ruleset.
+- Базовые боевые действия реализованы отдельно от классов. Классы добавляют features/resources, но не владеют общей логикой Attack/Dash/Dodge/etc.
+- Сложные bonus actions/reactions классов и многие spell interactions пока упрощены или отмечены как not implemented.
+- Предметы и импровизированные действия реализованы упрощённо.
+- Расовые особенности есть в rules/character system, но training curriculum пока в основном использует class-focused presets.
+- GUI предназначен для демонстрации, инференса и просмотра боёв; обучение остаётся CLI-only.
 
 ## Тесты
-
-```bash
-python -m pytest
-```
-
-На Windows из локального venv:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest
 ```
-
-## Текущие ограничения
-
-- Ruleset намеренно минимальный.
-- GUI не запускает обучение.
-- Custom battle setup уже использует JSON-карты и preview, но полноценный drag-and-drop редактор боя ещё в roadmap.
-- Предметы и improvised actions реализованы упрощённо.
-- Некоторые class features/spells сохранены как not implemented и не попадают в action masks.
-
-## Roadmap
-
-См. [ROADMAP.md](ROADMAP.md).

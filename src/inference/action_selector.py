@@ -92,6 +92,7 @@ def decode_policy_output(
             actor_id,
             target_cell_index=_optional_output_int(model_output, "target_cell_index"),
             direction_index=_optional_output_int(model_output, "direction_index"),
+            slot_level=_optional_output_int(model_output, "slot_level"),
         )
     except ValueError as error:
         raise ActionSelectionError(f"Policy selected an illegal action: {error}") from error

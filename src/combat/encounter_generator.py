@@ -220,6 +220,17 @@ def _curriculum_resistance_state() -> CombatState:
     )
 
 
+def _curriculum_wizard_fire_elemental_state() -> CombatState:
+    return CombatState(
+        characters=[
+            FighterChampionGreatsword(Position(0, 1)),
+            WizardEvoker(Position(0, 3)),
+            FireElementalSimple(Position(7, 2)),
+        ],
+        grid_map=GridMap(width=8, height=5),
+    )
+
+
 def _curriculum_obstacle_cover_state() -> CombatState:
     normal = TerrainType.NORMAL
     blocked = TerrainType.BLOCKED
@@ -289,9 +300,9 @@ CURRICULUM_STAGES: tuple[CurriculumStage, ...] = (
     ),
     CurriculumStage(
         level=8,
-        name="Wizard vs FireElementalSimple",
-        description="Damage-type awareness against fire immunity and weapon resistance.",
-        factory=level_5_wizard_evoker_vs_fire_elemental,
+        name="Wizard + Fighter vs FireElementalSimple",
+        description="Damage-type awareness against fire immunity with martial backup.",
+        factory=_curriculum_wizard_fire_elemental_state,
     ),
     CurriculumStage(
         level=9,

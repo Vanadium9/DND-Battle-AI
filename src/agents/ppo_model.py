@@ -11,7 +11,6 @@ from torch.distributions import Categorical
 from agents.action_space import (
     ACTION_CATEGORY_COUNT,
     MAIN_ACTION_TYPE_COUNT,
-    MIN_OPTION_COUNT,
     ActionCategory,
     MainActionType,
 )
@@ -20,7 +19,7 @@ from agents.observation import PPO_INPUT_SIZE
 
 DEFAULT_TARGET_COUNT = 8
 DEFAULT_MOVE_COUNT = 64
-DEFAULT_OPTION_COUNT = MIN_OPTION_COUNT
+DEFAULT_OPTION_COUNT = 16
 MASKED_LOGIT_VALUE = -1.0e9
 
 

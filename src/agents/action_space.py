@@ -62,6 +62,7 @@ from combat.class_features import (
     implemented_feature_active_actions,
 )
 from combat.cover import CoverType
+from combat.damage import character_immunities, coerce_damage_type
 from combat.items import (
     CombatItem,
     ItemActionCost,
@@ -195,6 +196,7 @@ def build_action_masks(state: CombatState, actor_id: int) -> dict[str, torch.Ten
     target_cell_mask = _build_target_cell_mask(state, actor, main_action_type_mask)
     direction_mask = _build_direction_mask(state, actor, main_action_type_mask)
     option_mask = _build_option_mask(state, actor_id, actor, main_action_type_mask)
+    slot_level_mask = _build_slot_level_mask(state, actor, main_action_type_mask)
 
     action_category_mask = torch.zeros(ACTION_CATEGORY_COUNT, dtype=torch.bool)
     action_category_mask[int(ActionCategory.MAIN_ACTION)] = bool(main_action_type_mask.any())
@@ -217,6 +219,7 @@ def build_action_masks(state: CombatState, actor_id: int) -> dict[str, torch.Ten
         "move_index": move_mask,
         "target_cell_index": target_cell_mask,
         "direction_index": direction_mask,
+        "slot_level": slot_level_mask,
         "option_index": option_mask,
     }
 
@@ -627,6 +630,7 @@ def decode_action(
     actor_id: int,
     target_cell_index: int | None = None,
     direction_index: int | None = None,
+    slot_level: int | None = None,
     masks: dict[str, torch.Tensor] | None = None,
 ) -> CombatAction:
     """Decode hierarchical PPO outputs into a concrete combat action."""
@@ -725,6 +729,13 @@ def decode_action(
         return _decode_attack(state, actor_id, target_index, option_index)
 
     if selected_main_action is MainActionType.CAST_SPELL:
+        if "slot_level" in masks:
+            _validate_masked_index(
+                int(slot_level or 0),
+                masks["slot_level"],
+                "slot_level",
+                actor_id,
+            )
         return _decode_cast_spell(
             state,
             actor_id,
@@ -732,6 +743,7 @@ def decode_action(
             move_index if target_cell_index is None else target_cell_index,
             option_index,
             direction_index,
+            slot_level,
         )
 
     if selected_main_action is MainActionType.DASH:
@@ -923,6 +935,7 @@ def _empty_masks(
         "move_index": torch.zeros(_move_space_size(state), dtype=torch.bool),
         "target_cell_index": torch.zeros(_move_space_size(state), dtype=torch.bool),
         "direction_index": torch.zeros(len(AOE_DIRECTIONS), dtype=torch.bool),
+        "slot_level": torch.zeros(4, dtype=torch.bool),
         "option_index": torch.zeros(_option_space_size(actor), dtype=torch.bool),
     }
 
@@ -1141,6 +1154,30 @@ def _build_direction_mask(
     return direction_mask
 
 
+def _build_slot_level_mask(
+    state: CombatState,
+    actor: Character,
+    main_action_type_mask: torch.Tensor,
+) -> torch.Tensor:
+    slot_level_mask = torch.zeros(4, dtype=torch.bool)
+    if not main_action_type_mask[int(MainActionType.CAST_SPELL)]:
+        slot_level_mask[0] = True
+        return slot_level_mask
+
+    action_spells = _available_spells(actor, "action")
+    if any(spell.spell_level <= 0 for spell in action_spells):
+        slot_level_mask[0] = True
+
+    remaining = getattr(actor, "spell_slots_remaining", {}) or {}
+    for level in range(1, 4):
+        if int(remaining.get(level, 0)) > 0:
+            slot_level_mask[level] = True
+
+    if not slot_level_mask.any():
+        slot_level_mask[0] = True
+    return slot_level_mask
+
+
 def _build_option_mask(
     state: CombatState,
     actor_id: int,
@@ -1210,17 +1247,31 @@ def _decode_cast_spell(
     target_cell_index: int,
     option_index: int,
     direction_index: int | None = None,
+    slot_level: int | None = None,
 ) -> CastSpellAction:
     actor = state.character_at(actor_id)
     spell_option = _spell_option_at_index(actor, option_index, "action")
     if actor is None or spell_option is None:
         raise ValueError(f"option_index {option_index} has no valid spell for actor {actor_id}")
+    if not _spell_option_is_valid(state, actor, spell_option):
+        fallback_spell_option = _first_valid_spell_option(state, actor, "action")
+        if fallback_spell_option is None:
+            raise ValueError(f"option_index {option_index} has no valid spell for actor {actor_id}")
+        spell_option = fallback_spell_option
     spell = spell_option.spell
+    cast_level = _cast_level_for_spell(actor, spell, slot_level)
     if spell_requires_target_cell(spell):
         target_cell = _position_from_move_index(state, target_cell_index)
         if not _can_target_cell_with_spell(state, actor, target_cell, spell):
-            raise ValueError(f"target_cell {target_cell} is not valid for {spell.name}")
-        return CastSpellAction(actor_id=actor_id, spell=spell, target_cell=target_cell)
+            target_cell = _first_valid_spell_target_cell(state, actor, spell)
+        if target_cell is None:
+            raise ValueError(f"target_cell is not valid for {spell.name}")
+        return CastSpellAction(
+            actor_id=actor_id,
+            spell=spell,
+            target_cell=target_cell,
+            cast_level=cast_level,
+        )
     if spell_requires_direction(spell):
         direction = (
             coerce_aoe_direction(direction_index)
@@ -1228,15 +1279,30 @@ def _decode_cast_spell(
             else spell_option.direction
         )
         if direction is None or not _can_direction_with_spell(state, actor, direction, spell):
+            direction = _first_valid_spell_direction(state, actor, spell)
+        if direction is None:
             raise ValueError(f"direction is not valid for {spell.name}")
-        return CastSpellAction(actor_id=actor_id, spell=spell, direction=direction)
+        return CastSpellAction(
+            actor_id=actor_id,
+            spell=spell,
+            direction=direction,
+            cast_level=cast_level,
+        )
     target_id = None
     if spell.damage is not None or spell.healing is not None:
         target = state.character_at(target_index)
         if not _can_target_spell(state, actor, target, spell):
+            target_id = _first_valid_spell_target_id(state, actor, spell)
+        else:
+            target_id = target_index
+        if target_id is None:
             raise ValueError(f"target_index {target_index} is not valid for {spell.name}")
-        target_id = target_index
-    return CastSpellAction(actor_id=actor_id, spell=spell, target_id=target_id)
+    return CastSpellAction(
+        actor_id=actor_id,
+        spell=spell,
+        target_id=target_id,
+        cast_level=cast_level,
+    )
 
 
 def _first_valid_weapon_for_target(
@@ -1838,12 +1904,62 @@ def _spell_at_option(
     return spells[option_index]
 
 
+def _first_valid_spell_option(
+    state: CombatState,
+    actor: Character,
+    action_cost: str | None = None,
+) -> SpellOption | None:
+    for spell_option in _spell_options(actor, action_cost):
+        if _spell_option_is_valid(state, actor, spell_option):
+            return spell_option
+    return None
+
+
+def _first_valid_spell_target_id(
+    state: CombatState,
+    actor: Character,
+    spell: SpellAbility,
+) -> int | None:
+    for target_id, target in enumerate(state.characters):
+        if _can_target_spell(state, actor, target, spell):
+            return target_id
+    return None
+
+
+def _first_valid_spell_target_cell(
+    state: CombatState,
+    actor: Character,
+    spell: SpellAbility,
+) -> Position | None:
+    for position in _grid_positions(state):
+        if _can_target_cell_with_spell(state, actor, position, spell):
+            return position
+    return None
+
+
+def _first_valid_spell_direction(
+    state: CombatState,
+    actor: Character,
+    spell: SpellAbility,
+) -> AoEDirection | None:
+    for direction in AOE_DIRECTIONS:
+        if _can_direction_with_spell(state, actor, direction, spell):
+            return direction
+    return None
+
+
 def _spell_option_is_valid(
     state: CombatState,
     actor: Character,
     spell_option: SpellOption,
 ) -> bool:
     spell = spell_option.spell
+    if (
+        spell.damage is not None
+        and _spell_only_hits_immune_enemies(state, actor, spell, spell_option)
+        and _has_non_immune_damage_spell_alternative(state, actor, spell)
+    ):
+        return False
     if spell_requires_target_cell(spell):
         return any(
             _can_target_cell_with_spell(state, actor, position, spell)
@@ -1859,6 +1975,153 @@ def _spell_option_is_valid(
     return _spell_has_valid_target_or_no_target(state, actor, spell)
 
 
+def _cast_level_for_spell(
+    actor: Character,
+    spell: SpellAbility,
+    slot_level: int | None,
+) -> int | None:
+    if spell.spell_level <= 0 or slot_level is None:
+        return None
+    selected_level = int(slot_level)
+    if selected_level <= 0:
+        return None
+    cast_level = spell_cast_level(spell, selected_level)
+    if int(getattr(actor, "spell_slots_remaining", {}).get(cast_level, 0)) <= 0:
+        return None
+    return cast_level
+
+
+def _spell_only_hits_immune_enemies(
+    state: CombatState,
+    actor: Character,
+    spell: SpellAbility,
+    spell_option: SpellOption | None = None,
+) -> bool:
+    damage_type = coerce_damage_type(getattr(spell, "damage_type", None))
+    if damage_type is None:
+        return False
+    valid_targets = _spell_damage_targets(state, actor, spell, spell_option)
+    if not valid_targets:
+        return False
+    return all(
+        damage_type in character_immunities(target)
+        for target in valid_targets
+        if target.team != actor.team
+    )
+
+
+def _has_non_immune_damage_spell_alternative(
+    state: CombatState,
+    actor: Character,
+    current_spell: SpellAbility,
+) -> bool:
+    for spell in _available_spells(actor, "action"):
+        if spell is current_spell or spell.damage is None:
+            continue
+        damage_type = coerce_damage_type(getattr(spell, "damage_type", None))
+        if damage_type is None:
+            continue
+        if any(
+            target.team != actor.team and damage_type not in character_immunities(target)
+            for target in _spell_damage_targets(state, actor, spell)
+        ):
+            return True
+    return False
+
+
+def _spell_damage_targets(
+    state: CombatState,
+    actor: Character,
+    spell: SpellAbility,
+    spell_option: SpellOption | None = None,
+) -> list[Character]:
+    if spell.damage is None:
+        return []
+    if spell_requires_target_cell(spell):
+        targets: list[Character] = []
+        for position in _grid_positions(state):
+            if not _can_target_cell_with_spell(state, actor, position, spell):
+                continue
+            targets.extend(_affected_enemies_for_spell_cell(state, actor, spell, position))
+        return _unique_characters(targets)
+    if spell_requires_direction(spell):
+        directions = (
+            (spell_option.direction,)
+            if spell_option is not None and spell_option.direction is not None
+            else AOE_DIRECTIONS
+        )
+        targets = []
+        for direction in directions:
+            if direction is None or not _can_direction_with_spell(state, actor, direction, spell):
+                continue
+            targets.extend(_affected_enemies_for_spell_direction(state, actor, spell, direction))
+        return _unique_characters(targets)
+    return [
+        target
+        for target in state.characters
+        if target.team != actor.team and _can_target_spell(state, actor, target, spell)
+    ]
+
+
+def _affected_enemies_for_spell_cell(
+    state: CombatState,
+    actor: Character,
+    spell: SpellAbility,
+    target_cell: Position,
+) -> list[Character]:
+    targeting = AoETargeting(
+        shape=AoEShape.RADIUS,
+        origin=actor.position,
+        size=spell.area_size,
+        target_cell=target_cell,
+    )
+    positions = positions_for_aoe(targeting)
+    if state.grid_map is not None:
+        positions = {position for position in positions if state.grid_map.in_bounds(position)}
+    return [
+        target
+        for target in affected_creatures(state.characters, positions)
+        if target.team != actor.team
+    ]
+
+
+def _affected_enemies_for_spell_direction(
+    state: CombatState,
+    actor: Character,
+    spell: SpellAbility,
+    direction: AoEDirection,
+) -> list[Character]:
+    shape = spell_aoe_shape(spell)
+    if shape is None:
+        return []
+    targeting = AoETargeting(
+        shape=shape,
+        origin=actor.position,
+        size=spell.area_size,
+        direction=direction,
+    )
+    positions = positions_for_aoe(targeting)
+    if state.grid_map is not None:
+        positions = {position for position in positions if state.grid_map.in_bounds(position)}
+    return [
+        target
+        for target in affected_creatures(state.characters, positions)
+        if target.team != actor.team
+    ]
+
+
+def _unique_characters(characters: list[Character]) -> list[Character]:
+    seen: set[int] = set()
+    unique: list[Character] = []
+    for character in characters:
+        marker = id(character)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        unique.append(character)
+    return unique
+
+
 def _spell_has_valid_target_or_no_target(
     state: CombatState,
     actor: Character,
@@ -1866,6 +2129,12 @@ def _spell_has_valid_target_or_no_target(
 ) -> bool:
     if spell.damage is None and spell.healing is None:
         return True
+    if (
+        spell.damage is not None
+        and _spell_only_hits_immune_enemies(state, actor, spell)
+        and _has_non_immune_damage_spell_alternative(state, actor, spell)
+    ):
+        return False
     return any(_can_target_spell(state, actor, target, spell) for target in state.characters)
 
 

@@ -323,6 +323,7 @@ class PPOTrainer:
         if self.curriculum_config.enabled and self.encounter_generator is not None:
             self.encounter_generator.set_curriculum_level(self.current_curriculum_level)
         self._initialize_parallel_environments()
+        self.episode_steps_by_env = [0 for _ in self.environments]
 
     def collect_episode(
         self,
@@ -416,14 +417,14 @@ class PPOTrainer:
                 "env_step": 0.0,
                 "update": 0.0,
             }
-        episode_steps = [0 for _ in self.environments]
+        self._ensure_episode_step_counters()
         self._set_policies_eval()
 
         while len(rollout) < steps:
             active_entries = self._prepare_rollout_entries(
                 rollout,
                 steps - len(rollout),
-                episode_steps,
+                self.episode_steps_by_env,
             )
             if not active_entries:
                 break
@@ -452,11 +453,11 @@ class PPOTrainer:
                 started = time.perf_counter()
                 result = environment.step(action)
                 self._add_profile_time(rollout, "env_step", started)
-                episode_steps[env_index] += 1
+                self.episode_steps_by_env[env_index] += 1
                 environment_done = environment.is_done()
                 timeout = (
                     max_episode_steps is not None
-                    and episode_steps[env_index] >= max_episode_steps
+                    and self.episode_steps_by_env[env_index] >= max_episode_steps
                     and not environment_done
                 )
                 done = environment_done or timeout
@@ -477,13 +478,11 @@ class PPOTrainer:
                     rollout.episode_winners.append(winner)
                     self.record_curriculum_result(winner)
                     self._reset_environment_for_episode(env_index)
-                    episode_steps[env_index] = 0
                 elif timeout:
                     rollout.episode_winners.append(None)
                     rollout.episode_timeouts += 1
                     self.record_curriculum_result(None)
                     self._reset_environment_for_episode(env_index)
-                    episode_steps[env_index] = 0
 
         rollout.last_value = self._bootstrap_value()
         rollout.last_values_by_env = {
@@ -1040,7 +1039,10 @@ class PPOTrainer:
         masks: dict[str, torch.Tensor] | None = None,
     ) -> Any:
         try:
-            action_category, main_action_type, target_index, move_index, option_index = (
+            slot_level_output = action_output.get("slot_level")
+            if slot_level_output is None:
+                slot_level_output = torch.zeros_like(action_output["action_category"])
+            action_category, main_action_type, target_index, move_index, option_index, slot_level = (
                 torch.stack(
                     (
                         action_output["action_category"].reshape(()),
@@ -1048,6 +1050,7 @@ class PPOTrainer:
                         action_output["target_index"].reshape(()),
                         action_output["move_index"].reshape(()),
                         action_output["option_index"].reshape(()),
+                        slot_level_output.reshape(()),
                     )
                 )
                 .detach()
@@ -1055,6 +1058,17 @@ class PPOTrainer:
                 .tolist()
             )
             decoder = decode_fast_training_action if self.fast_action_masks else decode_action
+            if self.fast_action_masks:
+                return decoder(
+                    int(action_category),
+                    int(main_action_type),
+                    int(target_index),
+                    int(move_index),
+                    int(option_index),
+                    state,
+                    actor_id,
+                    masks=masks,
+                )
             return decoder(
                 int(action_category),
                 int(main_action_type),
@@ -1063,6 +1077,7 @@ class PPOTrainer:
                 int(option_index),
                 state,
                 actor_id,
+                slot_level=int(slot_level) if not self.fast_action_masks else None,
                 masks=masks,
             )
         except ValueError:
@@ -1102,6 +1117,16 @@ class PPOTrainer:
                 )
             )
 
+    def _ensure_episode_step_counters(self) -> None:
+        if not hasattr(self, "episode_steps_by_env"):
+            self.episode_steps_by_env = []
+        if len(self.episode_steps_by_env) < len(self.environments):
+            self.episode_steps_by_env.extend(
+                0 for _ in range(len(self.environments) - len(self.episode_steps_by_env))
+            )
+        elif len(self.episode_steps_by_env) > len(self.environments):
+            self.episode_steps_by_env = self.episode_steps_by_env[: len(self.environments)]
+
     def _generate_environment_for_episode(
         self,
         *,
@@ -1123,6 +1148,7 @@ class PPOTrainer:
         )
 
     def _reset_environment_for_episode(self, env_index: int = 0) -> None:
+        self._ensure_episode_step_counters()
         environment = self.environments[env_index]
         if self.curriculum_config.enabled and self.encounter_generator is not None:
             self.encounter_generator.set_curriculum_level(self.current_curriculum_level)
@@ -1133,6 +1159,7 @@ class PPOTrainer:
             )
             if env_index == 0:
                 self.environment = self.environments[0]
+            self.episode_steps_by_env[env_index] = 0
             return
         if self.encounter_generator is not None and self.num_envs > 1:
             self.environments[env_index] = self.encounter_generator.generate_environment(
@@ -1141,10 +1168,12 @@ class PPOTrainer:
             )
             if env_index == 0:
                 self.environment = self.environments[0]
+            self.episode_steps_by_env[env_index] = 0
             return
         environment.reset()
         if env_index == 0:
             self.environment = environment
+        self.episode_steps_by_env[env_index] = 0
 
     def _resolve_curriculum_config(
         self,

@@ -1,7 +1,11 @@
 from pathlib import Path
 
+import torch
+
 from combat import Team
 from agents import GNNPPOActorCritic, PPOActorCritic
+from agents.action_space import build_fast_training_action_masks
+from combat import CombatEnvironment, EncounterGenerator, FighterArcher, Goblin, GridMap, MAX_CURRICULUM_LEVEL, Position
 from scripts.train_ppo import (
     aggregate_action_distribution,
     build_curriculum_config,
@@ -10,9 +14,11 @@ from scripts.train_ppo import (
     format_report,
     format_profile_times,
     format_update_report,
+    load_checkpoint_for_training,
     resolve_device,
 )
-from training import EpisodeStats, RolloutBuffer
+from configs import PPOConfig
+from training import EpisodeStats, PPOTrainer, RolloutBuffer
 
 
 def test_aggregate_action_distribution_formats_nonzero_counts() -> None:
@@ -80,6 +86,48 @@ def test_default_checkpoint_matches_selected_model_type() -> None:
 def test_build_model_uses_selected_architecture() -> None:
     assert isinstance(build_model("gnn"), GNNPPOActorCritic)
     assert isinstance(build_model("mlp"), PPOActorCritic)
+
+
+def test_load_checkpoint_for_training_loads_model_state() -> None:
+    checkpoint_dir = Path("checkpoints") / "test_train_ppo_script"
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    environment = CombatEnvironment(
+        characters=[FighterArcher(Position(0, 0)), Goblin(Position(1, 0))],
+        grid_map=GridMap(width=8, height=8),
+        use_initiative=False,
+        log_to_console=False,
+    )
+    model = PPOActorCritic(target_count=6, move_count=64, hidden_sizes=(16,))
+    trainer = PPOTrainer(
+        environment=environment,
+        model=model,
+        config=PPOConfig(checkpoint_dir=str(checkpoint_dir), update_epochs=1, minibatch_size=1),
+    )
+    checkpoint_path = checkpoint_dir / "resume_model.pt"
+    with torch.no_grad():
+        trainer.model.value_head.bias.fill_(3.0)
+    trainer.save_checkpoint(checkpoint_path.name)
+    with torch.no_grad():
+        trainer.model.value_head.bias.zero_()
+
+    status = load_checkpoint_for_training(trainer, checkpoint_path)
+
+    assert status.startswith("loaded:")
+    assert trainer.model.value_head.bias.item() == 3.0
+
+
+def test_default_gnn_model_covers_curriculum_option_masks() -> None:
+    model = build_model("gnn")
+    generator = EncounterGenerator(seed=0)
+    max_option_size = 0
+    for level in range(1, MAX_CURRICULUM_LEVEL + 1):
+        state = generator.generate_curriculum_state(level)
+        for actor_id, actor in enumerate(state.characters):
+            if actor.team is Team.PLAYERS:
+                masks = build_fast_training_action_masks(state, actor_id)
+                max_option_size = max(max_option_size, masks["option_index"].shape[0])
+
+    assert model.option_count >= max_option_size
 
 
 def test_resolve_device_auto_returns_available_torch_device() -> None:
