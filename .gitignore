@@ -9,3 +9,7 @@ __pycache__/
 .idea/
 
 checkpoints/
+
+.docx
+
+report_docx_extracted.txt

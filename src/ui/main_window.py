@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QLabel, QHBoxLayout, QMainWindow, QStackedWidget, QWidget
 
@@ -17,8 +15,6 @@ from ui.screens import (
     HomeScreen,
     PlaceholderScreen,
     RandomBattleScreen,
-    ReplayListScreen,
-    ReplayViewerScreen,
     SettingsScreen,
 )
 from ui.services import BattleSetupResult, BattleSetupService, ModelService
@@ -41,10 +37,6 @@ SCREEN_DEFINITIONS: dict[str, tuple[str, str]] = {
     "custom_battle": (
         "Кастомный бой",
         "Настройка состава сторон, карты и стартовых условий боя.",
-    ),
-    "replays": (
-        "Реплеи",
-        "Просмотр сохранённых BattleReplay JSON и истории шагов боя.",
     ),
     "settings": (
         "Настройки",
@@ -81,9 +73,6 @@ class MainWindow(QMainWindow):
         self._character_builder_screen: CharacterBuilderScreen | None = None
         self._battle_screen: BattleScreen | None = None
         self._battle_screen_index: int | None = None
-        self._replay_list_screen: ReplayListScreen | None = None
-        self._replay_viewer_screen: ReplayViewerScreen | None = None
-        self._replay_viewer_screen_index: int | None = None
         self._selected_battle_status = "Бой: не выбран"
         self._model_status_label = QLabel()
         self._fallback_status_label = QLabel()
@@ -106,10 +95,6 @@ class MainWindow(QMainWindow):
         if key in {"random_battle", "custom_battle"}:
             self._battle_setup_service.map_dir = resolve_project_path(
                 self._model_service.settings.map_dir
-            )
-        if key == "replays" and self._replay_list_screen is not None:
-            self._replay_list_screen.replay_dir = resolve_project_path(
-                self._model_service.settings.replay_dir
             )
         refresh = getattr(current_widget, "refresh", None)
         if callable(refresh):
@@ -158,16 +143,6 @@ class MainWindow(QMainWindow):
         self._add_screen("custom_battle", CustomBattleScreen(self._battle_setup_service))
         self._battle_screen = BattleScreen(self._model_service)
         self._battle_screen_index = self._stack.addWidget(self._battle_screen)
-        self._replay_list_screen = ReplayListScreen(
-            resolve_project_path(self._model_service.settings.replay_dir)
-        )
-        self._replay_list_screen.open_requested.connect(self._open_replay_viewer)
-        self._add_screen("replays", self._replay_list_screen)
-        self._replay_viewer_screen = ReplayViewerScreen()
-        self._replay_viewer_screen.back_requested.connect(
-            lambda: self._navigation.select("replays")
-        )
-        self._replay_viewer_screen_index = self._stack.addWidget(self._replay_viewer_screen)
         settings_screen = SettingsScreen(self._model_service)
         settings_screen.settings_changed.connect(self._update_status_bar)
         self._add_screen("settings", settings_screen)
@@ -178,7 +153,6 @@ class MainWindow(QMainWindow):
                 "character_create",
                 "custom_battle",
                 "random_battle",
-                "replays",
                 "settings",
             }:
                 continue
@@ -212,13 +186,6 @@ class MainWindow(QMainWindow):
         )
         self._update_status_bar()
         self._stack.setCurrentIndex(self._battle_screen_index)
-
-    def _open_replay_viewer(self, path: object) -> None:
-        if self._replay_viewer_screen is None or self._replay_viewer_screen_index is None:
-            return
-        self._replay_viewer_screen.load_replay(Path(str(path)))
-        self._stack.setCurrentIndex(self._replay_viewer_screen_index)
-        self._update_status_bar()
 
     def _update_status_bar(self) -> None:
         settings = self._model_service.settings

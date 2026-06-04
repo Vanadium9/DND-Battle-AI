@@ -178,8 +178,6 @@ def _slot_key(label: str) -> str:
         normalized = normalized.split(":", 1)[0].strip()
     if normalized.startswith("shove"):
         return "shove"
-    if normalized.startswith("search"):
-        return "search"
     if normalized.startswith("move"):
         return "move"
     return normalized
@@ -203,8 +201,6 @@ STABLE_SLOTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "Help",
             "Grapple",
             "Shove",
-            "Stabilize",
-            "Search",
         ),
     ),
     (
@@ -230,12 +226,10 @@ _ACTION_ICONS: dict[str, str] = {
     "dodge": "◈",
     "help": "✚",
     "hide": "◌",
-    "search": "⌕",
     "use object": "▣",
     "ready": "⏱",
     "grapple": "⌁",
     "shove": "⇢",
-    "stabilize": "✚",
     "end turn": "⏭",
     "second wind": "✚",
     "action surge": "★",

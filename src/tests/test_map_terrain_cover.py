@@ -7,7 +7,6 @@ from combat import (
     GridMap,
     MoveAction,
     Position,
-    SearchAction,
     Stats,
     Team,
     TerrainType,
@@ -156,20 +155,3 @@ def test_hide_is_masked_without_cover() -> None:
     masks = build_action_masks(state, actor_id=0)
 
     assert not masks["main_action_type"][MainActionType.HIDE]
-
-
-def test_search_reveals_hidden_visible_target(monkeypatch) -> None:
-    hero = make_character("Hero", Position(0, 0), Team.PLAYERS)
-    enemy = make_character("Enemy", Position(1, 0), Team.ENEMIES)
-    enemy.hidden = True
-    state = CombatState(
-        characters=[hero, enemy],
-        grid_map=GridMap(width=3, height=3),
-    )
-    monkeypatch.setattr("combat.common_actions.random.randint", lambda _low, _high: 12)
-
-    result = SearchAction(actor_id=0).execute(state)
-
-    assert result.success
-    assert enemy.hidden is False
-    assert "Revealed hidden targets: Enemy" in result.description

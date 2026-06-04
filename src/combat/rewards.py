@@ -415,7 +415,7 @@ def _common_action_rewards(
             rewards["useless_hide"] = -config.useless_hide_penalty
     elif action_name == "ReadyAction":
         rewards["untriggered_ready"] = -config.untriggered_ready_penalty
-    elif action_name in {"UseObjectAction", "ImprovisedAction"}:
+    elif action_name == "UseObjectAction":
         if not _action_had_state_effect(before, after, actor_team):
             rewards["no_effect_action"] = -config.no_effect_action_penalty
     elif action_name == "MoveAction":

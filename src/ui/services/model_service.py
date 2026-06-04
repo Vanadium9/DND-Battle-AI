@@ -99,7 +99,6 @@ class ModelService:
         animation_speed: int | None = None,
         autobattle_delay: int | None = None,
         character_dir: str | None = None,
-        replay_dir: str | None = None,
         map_dir: str | None = None,
         random_battle_seed: object = _UNSET,
     ) -> None:
@@ -118,8 +117,6 @@ class ModelService:
             self.settings.autobattle_delay = normalize_autobattle_delay(autobattle_delay)
         if character_dir is not None:
             self.settings.character_dir = str(character_dir).strip() or self.settings.character_dir
-        if replay_dir is not None:
-            self.settings.replay_dir = str(replay_dir).strip() or self.settings.replay_dir
         if map_dir is not None:
             self.settings.map_dir = str(map_dir).strip() or self.settings.map_dir
         if random_battle_seed is not _UNSET:

@@ -48,10 +48,10 @@ def test_unsupported_reasons_include_content_policy() -> None:
 
 
 def test_unsupported_actions_and_levels_are_explained() -> None:
-    assert not is_supported_content("common_action", "ImprovisedAction")
+    assert not is_supported_content("common_action", "NonexistentAction")
     assert "Supported actions" in get_unsupported_reason(
         "common_action",
-        "ImprovisedAction",
+        "NonexistentAction",
     )
 
     assert not is_supported_content("level", 6)

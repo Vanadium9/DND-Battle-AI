@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 
 import torch
@@ -62,25 +61,3 @@ def test_run_battle_demo_prints_turn_fields(capsys) -> None:
     assert "Action:" in output
     assert "Result:" in output
     assert "Winner:" in output
-
-
-def test_run_battle_demo_saves_replay(capsys) -> None:
-    model = PPOActorCritic(target_count=6, move_count=64, hidden_sizes=(32,))
-    environment = create_demo_environment()
-    replay_dir = Path("checkpoints") / "test_run_demo_replays"
-
-    replay_path = run_battle_demo(
-        model,
-        environment,
-        max_steps=1,
-        save_replay=True,
-        replay_dir=replay_dir,
-    )
-
-    output = capsys.readouterr().out
-    assert replay_path is not None
-    assert replay_path.exists()
-    data = json.loads(replay_path.read_text(encoding="utf-8"))
-    assert data["format"] == "BattleReplay"
-    assert len(data["steps"]) == 1
-    assert "Replay saved:" in output

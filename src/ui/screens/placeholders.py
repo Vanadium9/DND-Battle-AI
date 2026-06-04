@@ -24,7 +24,7 @@ class PlaceholderScreen(QWidget):
         frame = ScreenFrame(title, description)
         frame.add_body_text(
             "Этот раздел будет подключаться к существующим модулям combat, "
-            "rules, agents и replay. Новая боевая логика здесь не дублируется."
+            "This section connects to existing combat, rules and agents modules. Combat rules are not duplicated here."
         )
         frame.content_layout.addStretch(1)
         layout.addWidget(frame)

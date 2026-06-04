@@ -30,8 +30,6 @@ def test_main_window_registers_navigation_screens() -> None:
     assert window.windowTitle() == "D&D Battle AI"
     assert set(window._screen_indexes) == {item.key for item in NAVIGATION_ITEMS}
 
-    window.set_screen("replays")
-    assert window._stack.currentIndex() == window._screen_indexes["replays"]
 
     window.close()
     app.processEvents()
@@ -133,8 +131,6 @@ def test_battle_screen_accepts_setup_result_and_steps_ai() -> None:
     assert not hasattr(screen, "_status_panel")
     assert screen._action_panel.minimumWidth() <= 220
     assert "●" in screen._combat_resources_label.text()
-    assert screen._replay is not None
-    assert len(screen._replay.steps) == 1
     assert screen._environment.action_log
     assert "Reward breakdown:" not in screen._log_widget.text()
 
@@ -188,8 +184,6 @@ def test_battle_screen_manual_player_can_end_turn() -> None:
 
     assert screen._environment is environment
     assert screen._environment.combat_state.active_actor_id == 1
-    assert screen._replay is not None
-    assert len(screen._replay.steps) == 1
 
     screen.close()
     app.processEvents()

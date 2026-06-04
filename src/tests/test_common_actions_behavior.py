@@ -12,7 +12,6 @@ from combat import (
     OpportunityAttackAction,
     Position,
     ReadyAction,
-    SearchAction,
     ShoveAction,
     StabilizeAction,
     Stats,
@@ -161,20 +160,6 @@ def test_hide_can_set_hidden_true(monkeypatch) -> None:
     assert "succeeds" in result.description
 
 
-def test_search_rolls_check_and_returns_result(monkeypatch) -> None:
-    hero = make_character("Hero", Position(0, 0), Team.PLAYERS, stats=Stats(int=14))
-    state = make_state(hero)
-    monkeypatch.setattr("combat.common_actions.random.randint", lambda _low, _high: 10)
-
-    result = SearchAction(actor_id=0, skill="investigation", dc=10).execute(state)
-
-    assert result.success
-    assert "Searches" in result.description
-    assert "Investigation:" in result.description
-    assert "total=14" in result.description
-    assert hero.action_economy.action_available is False
-
-
 def test_grapple_sets_grappled_on_successful_contested_check(monkeypatch) -> None:
     actor = make_character("Actor", Position(0, 0), Team.PLAYERS, stats=Stats(str=18))
     target = make_character("Target", Position(1, 0), Team.ENEMIES, stats=Stats(str=8, dex=8))
@@ -220,6 +205,7 @@ def test_shove_can_push_target_one_cell(monkeypatch) -> None:
 def test_stabilize_works_on_zero_hp_creature(monkeypatch) -> None:
     actor = make_character("Actor", Position(0, 0), Team.PLAYERS, stats=Stats(wis=10))
     target = make_character("Target", Position(1, 0), Team.PLAYERS, hp=0)
+    actor.common_actions.append("stabilize")
     state = make_state(actor, target)
     monkeypatch.setattr("combat.common_actions.random.randint", lambda _low, _high: 8)
 

@@ -4,7 +4,6 @@ from uuid import uuid4
 from combat import (
     ActionResult,
     AttackAction,
-    BattleReplay,
     Character,
     CombatState,
     MoveAction,
@@ -17,13 +16,14 @@ from ui.animations import (
     BattleAnimationKind,
     build_battle_animations,
     normalize_animation_speed,
+    snapshot_battle_state,
 )
 from ui.services import ModelService
 
 
 def test_battle_animations_include_movement_delta() -> None:
     state = _state()
-    before = BattleReplay().snapshot_state(state)
+    before = snapshot_battle_state(state)
     state.characters[0].position = Position(1, 0)
 
     animations = build_battle_animations(
@@ -41,7 +41,7 @@ def test_battle_animations_include_movement_delta() -> None:
 
 def test_battle_animations_include_attack_and_damage_delta() -> None:
     state = _state()
-    before = BattleReplay().snapshot_state(state)
+    before = snapshot_battle_state(state)
     state.characters[1].hp = 4
     weapon = state.characters[0].weapons[0]
 

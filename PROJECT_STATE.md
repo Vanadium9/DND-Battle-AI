@@ -3608,3 +3608,22 @@ ROADMAP должен обновиться:
 - `python -m pytest src/tests/test_gui_smoke.py src/tests/test_character_builder_validation.py src/tests/test_checks.py`
 - `python -m pytest`
 - результат полного прогона: `354 passed`
+## 100. Удаление replay и сокращение пространства общих действий
+
+Промт:
+- полностью удалить систему реплеев из интерфейса и кода
+- убрать действия Search: Perception, Search: Investigation и Improvised Action из кода, интерфейса и обучения
+- Stabilize оставить как кодовую заготовку для будущей системы death saves, но убрать из обучения и интерфейса
+
+Изменения:
+- удалены `src/combat/replay.py`, GUI-экраны replay viewer/list, консольный replay viewer и replay-тесты
+- из `MainActionType`, action masks, decode_action, fast masks, manual action builder и action panel убраны Search, Improvised и Stabilize
+- из common actions полностью удалены `SearchAction` и `ImprovisedAction`
+- `StabilizeAction` оставлен в `common_actions`, но больше не входит в default common_actions, ruleset supported actions, fallback candidates и GUI
+- из `CombatEnvironment.get_available_actions()` убраны fallback-кандидаты Search, Improvised и Stabilize
+- README/ROADMAP обновлены под отсутствие replay и сокращённый список общих боевых действий
+- тесты обновлены под новый контракт: Search/Improvised отсутствуют, Stabilize проверяется только при явном opt-in
+
+Проверка:
+- `PYTHONDONTWRITEBYTECODE=1 python -m pytest`
+- результат полного прогона: `349 passed`

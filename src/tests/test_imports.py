@@ -51,7 +51,6 @@ from combat import (
     GridMap,
     HelpAction,
     HideAction,
-    ImprovisedAction,
     InitiativeCheckResult,
     InitiativeResult,
     InitiativeRoll,
@@ -64,7 +63,6 @@ from combat import (
     ReadyAction,
     RewardConfig,
     Resource,
-    SearchAction,
     SecondWindAction,
     ShoveAction,
     create_test_encounter,
@@ -223,7 +221,6 @@ def test_project_imports() -> None:
     assert GrappleAction is not None
     assert HelpAction is not None
     assert HideAction is not None
-    assert ImprovisedAction is not None
     assert InitiativeCheckResult is not None
     assert InitiativeResult is not None
     assert InitiativeRoll is not None
@@ -237,7 +234,6 @@ def test_project_imports() -> None:
     assert WeaponAttack is not None
     assert RewardConfig is not None
     assert Resource is not None
-    assert SearchAction is not None
     assert SecondWindAction is not None
     assert ShoveAction is not None
     assert SpellAbility is not None

@@ -15,7 +15,6 @@ from combat import (
     GridMap,
     HelpAction,
     HideAction,
-    ImprovisedAction,
     MoveAction,
     PotionOfHealing,
     Position,
@@ -352,20 +351,6 @@ def test_reward_penalizes_common_actions_without_tactical_value(monkeypatch) -> 
         action_result=use_object_result,
     )
     assert use_object_reward.breakdown["no_effect_action"] < 0
-
-    actor.action_economy.action_available = True
-    before = snapshot_combat_state(state)
-    improvised = ImprovisedAction(actor_id=0)
-    improvised_result = improvised.execute(state)
-    improvised_reward = calculate_combat_reward(
-        before,
-        snapshot_combat_state(state),
-        actor_team=Team.PLAYERS,
-        action=improvised,
-        action_result=improvised_result,
-    )
-    assert improvised_reward.breakdown["no_effect_action"] < 0
-
 
 def test_spell_slot_penalty_scales_by_slot_level() -> None:
     actor = make_character("Wizard", Position(0, 0), Team.PLAYERS)

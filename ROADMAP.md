@@ -10,7 +10,6 @@ Roadmap фиксирует текущее состояние D&D Battle AI и б
 - Fighter 1-5 Champion, Cleric 1-5 Life Domain, Wizard 1-5 School of Evocation.
 - Базовые враги: Goblin, Orc, Skeleton, Bandit, Wolf, FireElementalSimple.
 - Карты через JSON-конфиги в `maps/`: terrain grid, cover, obstacles, spawn zones.
-- Replay JSON format, консольный replay viewer и GUI replay viewer.
 - PPO/GNN модель, action masks, entity-based observations, GNN encoder.
 - Curriculum training с уровнями сложности, multi-env rollouts, fast warm-up режимами и checkpoint resume.
 - PySide6 desktop GUI поверх существующего combat engine.
@@ -25,7 +24,6 @@ Roadmap фиксирует текущее состояние D&D Battle AI и б
 - custom battle setup;
 - battle viewer с клеточной картой;
 - manual action controls для поддержанного режима;
-- replay viewer;
 - settings screen с безопасными UI-настройками и read-only статусом фиксированной GNN PPO policy;
 - map preview для JSON-карт;
 - status bar, loading states, empty states, error dialogs и confirmation dialogs.
@@ -46,7 +44,7 @@ GUI используется для демонстрации, запуска б�
 
 Реализовано:
 
-- Attack, CastSpell, Dash, Disengage, Dodge, Help, Hide, Search, UseObject, Ready, Grapple, Shove, Stabilize, Opportunity Attack, EndTurn.
+- Attack, CastSpell, Dash, Disengage, Dodge, Help, Hide, UseObject, Ready, Grapple, Shove, Opportunity Attack, EndTurn.
 - Action, bonus action, reaction, movement, free object interaction.
 - Conditions/flags: prone, grappled, hidden, dodging, disengaged, prepared action, concentration.
 - Ability checks, contested checks и логирование бросков.
@@ -118,7 +116,6 @@ GUI используется для демонстрации, запуска б�
 Используемые папки:
 
 - `data/characters/` - созданные GUI персонажи во внутреннем JSON-формате.
-- `replays/` - replay JSON.
 - `maps/` - JSON-конфиги карт.
 - `checkpoints/` - обученные модели.
 - `configs/` - ruleset и training configs.
@@ -127,5 +124,4 @@ GUI используется для демонстрации, запуска б�
 
 ## Удалено или заменено
 
-- Отдельный simple 2D replay viewer на pygame не используется как основной viewer. Реплеи смотрятся через PySide6 GUI и консольный viewer.
 - Упоминания внешнего LongStoryShort importer не относятся к текущему GUI и внутреннему формату персонажей.

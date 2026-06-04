@@ -35,7 +35,7 @@ class HomeScreen(QWidget):
         status = QLabel(
             "Текущая основа GUI: навигация, экраны-заготовки и единая тема. "
             "Следующие итерации могут подключить редактор персонажей, запуск "
-            "encounter и просмотр BattleReplay."
+            "encounter and battle viewer."
         )
         status.setWordWrap(True)
         frame.content_layout.addWidget(status)

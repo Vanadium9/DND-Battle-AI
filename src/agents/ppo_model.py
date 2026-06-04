@@ -440,7 +440,6 @@ def _uses_target_index(
         | (main_action_type == int(MainActionType.HELP))
         | (main_action_type == int(MainActionType.GRAPPLE))
         | (main_action_type == int(MainActionType.SHOVE))
-        | (main_action_type == int(MainActionType.STABILIZE))
     )
     return main_action_selected & target_main_action
 
@@ -453,7 +452,6 @@ def _uses_option_index(
     option_main_action = (
         (main_action_type == int(MainActionType.ATTACK))
         | (main_action_type == int(MainActionType.CAST_SPELL))
-        | (main_action_type == int(MainActionType.SEARCH))
         | (main_action_type == int(MainActionType.USE_OBJECT))
         | (main_action_type == int(MainActionType.SHOVE))
     )

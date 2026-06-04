@@ -275,9 +275,6 @@ class ManualActionBuilder:
             (MainActionType.DODGE, "Dodge", 0),
             (MainActionType.HIDE, "Hide", 0),
             (MainActionType.READY, "Ready", 0),
-            (MainActionType.IMPROVISED, "Improvised Action", 0),
-            (MainActionType.SEARCH, "Search: Perception", 0),
-            (MainActionType.SEARCH, "Search: Investigation", 1),
         )
         for main_action, label, option_index in actions:
             if not _mask_allowed(main_mask, main_action):
@@ -320,7 +317,6 @@ class ManualActionBuilder:
             (MainActionType.GRAPPLE, "Grapple", 0),
             (MainActionType.SHOVE, "Shove Prone", 0),
             (MainActionType.SHOVE, "Shove Push", 1),
-            (MainActionType.STABILIZE, "Stabilize", 0),
         )
         for main_action, label, option_index in actions:
             if not _mask_allowed(main_mask, main_action):
@@ -929,8 +925,6 @@ ATTACK_GROUP_ACTIONS = {
     MainActionType.HELP,
     MainActionType.GRAPPLE,
     MainActionType.SHOVE,
-    MainActionType.STABILIZE,
-    MainActionType.SEARCH,
 }
 
 MOVEMENT_GROUP_ACTIONS = {

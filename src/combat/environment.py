@@ -19,12 +19,9 @@ from combat.actions import (
     GrappleAction,
     HelpAction,
     HideAction,
-    ImprovisedAction,
     MoveAction,
     ReadyAction,
-    SearchAction,
     ShoveAction,
-    StabilizeAction,
     UseObjectAction,
 )
 from combat.initiative import (
@@ -321,16 +318,13 @@ class CombatEnvironment:
             DisengageAction(actor_id=actor_id),
             DodgeAction(actor_id=actor_id),
             HideAction(actor_id=actor_id),
-            SearchAction(actor_id=actor_id),
             UseObjectAction(actor_id=actor_id),
             ReadyAction(actor_id=actor_id),
-            ImprovisedAction(actor_id=actor_id),
         ]
         for target_id, target in enumerate(self.combat_state.characters):
             if target_id == actor_id:
                 continue
             candidates.append(HelpAction(actor_id=actor_id, target_id=target_id))
-            candidates.append(StabilizeAction(actor_id=actor_id, target_id=target_id))
             if target.team != actor.team:
                 candidates.append(GrappleAction(actor_id=actor_id, target_id=target_id))
                 candidates.append(ShoveAction(actor_id=actor_id, target_id=target_id))

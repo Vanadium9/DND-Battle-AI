@@ -29,7 +29,6 @@ from combat import (
     Orc,
     PotionOfHealing,
     Position,
-    SearchAction,
     SecondWindAction,
     ShoveAction,
     Stats,
@@ -116,8 +115,6 @@ def test_build_fast_training_action_masks_reduces_common_action_space() -> None:
     assert masks["main_action_type"][MainActionType.ATTACK]
     assert masks["main_action_type"][MainActionType.DASH]
     assert not masks["main_action_type"][MainActionType.READY]
-    assert not masks["main_action_type"][MainActionType.SEARCH]
-    assert not masks["main_action_type"][MainActionType.IMPROVISED]
     assert masks["target_index"][2]
 
 
@@ -213,15 +210,6 @@ def test_decode_action_returns_concrete_combat_actions() -> None:
         state=state,
         actor_id=0,
     )
-    search_action = decode_action(
-        ActionCategory.MAIN_ACTION,
-        MainActionType.SEARCH,
-        target_index=0,
-        move_index=0,
-        option_index=1,
-        state=state,
-        actor_id=0,
-    )
     shove_action = decode_action(
         ActionCategory.MAIN_ACTION,
         MainActionType.SHOVE,
@@ -265,8 +253,6 @@ def test_decode_action_returns_concrete_combat_actions() -> None:
     assert attack_action.target_id == 2
     assert attack_action.weapon is not None
     assert attack_action.weapon.name == "Longbow"
-    assert isinstance(search_action, SearchAction)
-    assert search_action.skill == "investigation"
     assert isinstance(shove_action, ShoveAction)
     assert shove_action.shove_effect == "push"
     assert isinstance(end_turn_action, EndTurnAction)

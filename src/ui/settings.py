@@ -13,7 +13,6 @@ from ui.animations import DEFAULT_ANIMATION_SPEED_MS, normalize_animation_speed
 DEFAULT_SETTINGS_PATH = Path(__file__).resolve().parents[2] / "data" / "settings.json"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CHARACTER_DIR = "data/characters"
-DEFAULT_REPLAY_DIR = "replays"
 DEFAULT_MAP_DIR = "maps"
 DEFAULT_CHECKPOINT_PATH = "checkpoints/gnn_ppo_actor_critic.pt"
 FIXED_MODEL_TYPE = "gnn"
@@ -42,7 +41,6 @@ class GuiSettings:
     animations_enabled: bool = True
     autobattle_delay: int = DEFAULT_ANIMATION_SPEED_MS
     character_dir: str = DEFAULT_CHARACTER_DIR
-    replay_dir: str = DEFAULT_REPLAY_DIR
     map_dir: str = DEFAULT_MAP_DIR
     random_battle_seed: int | None = None
 
@@ -99,7 +97,6 @@ def settings_from_mapping(raw: dict[str, Any]) -> GuiSettings:
             raw.get("autobattle_delay", DEFAULT_ANIMATION_SPEED_MS)
         ),
         character_dir=_non_empty_path(raw.get("character_dir"), DEFAULT_CHARACTER_DIR),
-        replay_dir=_non_empty_path(raw.get("replay_dir"), DEFAULT_REPLAY_DIR),
         map_dir=_non_empty_path(raw.get("map_dir"), DEFAULT_MAP_DIR),
         random_battle_seed=normalize_optional_seed(raw.get("random_battle_seed")),
     )

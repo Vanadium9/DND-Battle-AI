@@ -24,12 +24,10 @@ supported_common_actions:
   - Dodge
   - Help
   - Hide
-  - Search
   - UseObject
   - Ready
   - Grapple
   - Shove
-  - Stabilize
   - EndTurn
 supported_spell_levels: 0-3
 supported_feats:

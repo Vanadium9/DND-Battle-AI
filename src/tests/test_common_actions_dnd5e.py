@@ -12,7 +12,6 @@ from combat import (
     PotionOfHealing,
     Position,
     ReadyAction,
-    SearchAction,
     ShoveAction,
     SpellAbility,
     StabilizeAction,
@@ -41,7 +40,7 @@ def make_character(
     )
 
 
-def test_dash_disengage_dodge_hide_search_and_ready_spend_action(monkeypatch) -> None:
+def test_dash_disengage_dodge_hide_and_ready_spend_action(monkeypatch) -> None:
     hero = make_character("Hero", Position(0, 0), Team.PLAYERS)
     state = CombatState(characters=[hero], grid_map=GridMap(width=4, height=4))
 
@@ -67,12 +66,6 @@ def test_dash_disengage_dodge_hide_search_and_ready_spend_action(monkeypatch) ->
     assert hero.hidden is True
     assert "Stealth:" in result.description
     assert "d20=10" in result.description
-
-    hero.action_economy.action_available = True
-    result = SearchAction(actor_id=0).execute(state)
-    assert result.success
-    assert "Searches" in result.description
-    assert "Perception:" in result.description
 
     hero.action_economy.action_available = True
     result = ReadyAction(
@@ -124,6 +117,7 @@ def test_grapple_shove_and_stabilize_use_action_economy(monkeypatch) -> None:
         characters=[hero, enemy, ally],
         grid_map=GridMap(width=4, height=4),
     )
+    hero.common_actions.append("stabilize")
 
     rolls = iter([20, 1, 1])
     monkeypatch.setattr("combat.common_actions.random.randint", lambda _low, _high: next(rolls))
@@ -204,13 +198,10 @@ def test_action_masks_include_common_action_resources() -> None:
     assert masks["main_action_type"][MainActionType.DODGE]
     assert masks["main_action_type"][MainActionType.HELP]
     assert masks["main_action_type"][MainActionType.HIDE]
-    assert masks["main_action_type"][MainActionType.SEARCH]
     assert masks["main_action_type"][MainActionType.USE_OBJECT]
     assert masks["main_action_type"][MainActionType.READY]
     assert masks["main_action_type"][MainActionType.GRAPPLE]
     assert masks["main_action_type"][MainActionType.SHOVE]
-    assert masks["main_action_type"][MainActionType.STABILIZE]
-    assert masks["main_action_type"][MainActionType.IMPROVISED]
     assert not masks["main_action_type"][MainActionType.CAST_SPELL]
 
     hero.action_economy.action_available = False

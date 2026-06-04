@@ -9,7 +9,17 @@ from agents import (
     HEAD_ORDER,
     PPOActorCritic,
 )
-from combat import CombatEnvironment, EncounterGenerator, FighterArcher, Goblin, GridMap, Position, Team
+from combat import (
+    Character,
+    CombatEnvironment,
+    EncounterGenerator,
+    FighterArcher,
+    Goblin,
+    GridMap,
+    Position,
+    Stats,
+    Team,
+)
 from configs import PPOConfig
 from training import CurriculumConfig, PPOTrainer, RolloutBuffer, aggressive_combat_policy, load_curriculum_config
 
@@ -22,6 +32,47 @@ def make_trainer(rollout_steps: int = 4) -> PPOTrainer:
         characters=[
             FighterArcher(Position(0, 0)),
             Goblin(Position(1, 0)),
+        ],
+        grid_map=GridMap(width=8, height=8),
+        use_initiative=False,
+        log_to_console=False,
+    )
+    model = PPOActorCritic(target_count=6, move_count=64, hidden_sizes=(32,))
+    config = PPOConfig(
+        rollout_steps=rollout_steps,
+        update_epochs=1,
+        minibatch_size=2,
+        learning_rate=1.0e-3,
+        checkpoint_dir=str(CHECKPOINT_DIR),
+    )
+    return PPOTrainer(environment=environment, model=model, config=config)
+
+
+def make_timeout_trainer(rollout_steps: int = 1) -> PPOTrainer:
+    environment = CombatEnvironment(
+        characters=[
+            Character(
+                name="Timeout Hero",
+                hp=20,
+                max_hp=20,
+                ac=12,
+                position=Position(0, 0),
+                speed=3,
+                stats=Stats(),
+                team=Team.PLAYERS,
+                weapons=[],
+            ),
+            Character(
+                name="Timeout Enemy",
+                hp=20,
+                max_hp=20,
+                ac=12,
+                position=Position(7, 7),
+                speed=3,
+                stats=Stats(),
+                team=Team.ENEMIES,
+                weapons=[],
+            ),
         ],
         grid_map=GridMap(width=8, height=8),
         use_initiative=False,
@@ -123,7 +174,7 @@ def test_collect_rollout_resets_episode_on_step_timeout() -> None:
 
 
 def test_episode_step_timeout_persists_across_rollouts() -> None:
-    trainer = make_trainer(rollout_steps=1)
+    trainer = make_timeout_trainer(rollout_steps=1)
 
     first = trainer.collect_rollout(max_episode_steps=2)
     second = trainer.collect_rollout(max_episode_steps=2)

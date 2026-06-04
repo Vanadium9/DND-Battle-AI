@@ -66,8 +66,6 @@ class SettingsScreen(QWidget):
         self._data_dirs_label.setText(
             "персонажи: "
             f"{display_project_path(settings.character_dir)}; "
-            "реплеи: "
-            f"{display_project_path(settings.replay_dir)}; "
             "карты: "
             f"{display_project_path(settings.map_dir)}"
         )

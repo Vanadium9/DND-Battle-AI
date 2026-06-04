@@ -98,13 +98,10 @@ class Character:
             "dodge",
             "help",
             "hide",
-            "search",
             "use_object",
             "ready",
             "grapple",
             "shove",
-            "stabilize",
-            "improvised_action",
             "opportunity_attack",
             "end_turn",
         ]

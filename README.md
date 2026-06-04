@@ -5,7 +5,7 @@ D&D Battle AI - учебный проект тактического пошаг�
 ## Возможности
 
 - Пошаговый `CombatEnvironment` с инициативой, раундами, action/bonus action/reaction и movement.
-- Общие боевые действия: Attack, CastSpell, Dash, Disengage, Dodge, Help, Hide, Search, UseObject, Ready, Grapple, Shove, Stabilize, EndTurn.
+- Общие боевые действия: Attack, CastSpell, Dash, Disengage, Dodge, Help, Hide, UseObject, Ready, Grapple, Shove, EndTurn.
 - Поддержанные классы 1-5 уровней: Fighter, Cleric, Wizard.
 - Поддержанные подклассы: Champion, Life Domain, School of Evocation.
 - Поддержанные расы: Human, Dwarf, Elf, Halfling.
@@ -89,17 +89,15 @@ Evaluation scenarios покрывают уровни 1-5, одиночные и 
 
 ## Структура проекта
 
-- `src/combat/` - combat engine, действия, карты, урон, spellcasting, replay.
+- `src/combat/` - combat engine, действия, карты, урон, spellcasting.
 - `src/rules/` - ruleset registry, progression, classes, subclasses, races, feats, XP.
 - `src/agents/` - observation encoders, action space, PPO/GNN models, rule-based agents.
 - `src/training/` - PPO trainer, curriculum, multi-agent и self-play заготовки.
 - `src/ui/` - PySide6 GUI.
 - `src/character/` - внутренний формат персонажей, validation, repository.
-- `scripts/` - CLI entrypoints для обучения, evaluation, GUI и replay viewer.
 - `configs/` - ruleset/training конфиги.
 - `maps/` - JSON-карты.
 - `data/characters/` - сохранённые персонажи GUI.
-- `replays/` - сохранённые replay JSON.
 - `checkpoints/` - обученные модели.
 
 ## Ограничения

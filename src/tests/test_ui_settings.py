@@ -24,7 +24,6 @@ def test_gui_settings_save_and_load_full_payload() -> None:
         animations_enabled=False,
         autobattle_delay=1200,
         character_dir="data/custom_characters",
-        replay_dir="custom_replays",
         map_dir="data/custom_maps",
         random_battle_seed=77,
     )
@@ -39,7 +38,6 @@ def test_gui_settings_save_and_load_full_payload() -> None:
     assert loaded.animations_enabled is False
     assert loaded.autobattle_delay == settings.autobattle_delay
     assert loaded.character_dir == settings.character_dir
-    assert loaded.replay_dir == settings.replay_dir
     assert loaded.map_dir == settings.map_dir
     assert loaded.random_battle_seed == settings.random_battle_seed
 
@@ -71,7 +69,6 @@ def test_model_service_persists_gui_paths_and_autobattle_delay() -> None:
         animation_speed=9999,
         autobattle_delay=300,
         character_dir="data/test_characters",
-        replay_dir="test_replays",
         map_dir="data/test_maps",
         random_battle_seed=123,
     )
@@ -81,7 +78,6 @@ def test_model_service_persists_gui_paths_and_autobattle_delay() -> None:
     assert reloaded.settings.animation_speed == 1500
     assert reloaded.settings.autobattle_delay == 300
     assert reloaded.settings.character_dir == "data/test_characters"
-    assert reloaded.settings.replay_dir == "test_replays"
     assert reloaded.settings.map_dir == "data/test_maps"
     assert reloaded.settings.random_battle_seed == 123
 

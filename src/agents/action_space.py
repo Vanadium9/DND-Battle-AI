@@ -28,12 +28,9 @@ from combat.actions import (
     COMMON_ACTION_GRAPPLE,
     COMMON_ACTION_HELP,
     COMMON_ACTION_HIDE,
-    COMMON_ACTION_IMPROVISED,
     COMMON_ACTION_MOVE,
     COMMON_ACTION_READY,
-    COMMON_ACTION_SEARCH,
     COMMON_ACTION_SHOVE,
-    COMMON_ACTION_STABILIZE,
     COMMON_ACTION_USE_OBJECT,
     ActionSurgeAction,
     AttackAction,
@@ -47,13 +44,10 @@ from combat.actions import (
     GrappleAction,
     HelpAction,
     HideAction,
-    ImprovisedAction,
     MoveAction,
     ReadyAction,
-    SearchAction,
     SecondWindAction,
     ShoveAction,
-    StabilizeAction,
     UseObjectAction,
 )
 from combat.class_features import (
@@ -114,13 +108,10 @@ class MainActionType(IntEnum):
     DODGE = 4
     HELP = 5
     HIDE = 6
-    SEARCH = 7
-    USE_OBJECT = 8
-    READY = 9
-    GRAPPLE = 10
-    SHOVE = 11
-    STABILIZE = 12
-    IMPROVISED = 13
+    USE_OBJECT = 7
+    READY = 8
+    GRAPPLE = 9
+    SHOVE = 10
 
 
 ACTION_CATEGORY_COUNT = len(ActionCategory)
@@ -129,8 +120,6 @@ MIN_OPTION_COUNT = 8
 
 SHOVE_PRONE_OPTION = 0
 SHOVE_PUSH_OPTION = 1
-SEARCH_PERCEPTION_OPTION = 0
-SEARCH_INVESTIGATION_OPTION = 1
 
 ALLOWED = "allowed"
 BLOCKED_NO_ACTION_AVAILABLE = "blocked: no_action_available"
@@ -769,10 +758,6 @@ def decode_action(
     if selected_main_action is MainActionType.HIDE:
         return HideAction(actor_id=actor_id)
 
-    if selected_main_action is MainActionType.SEARCH:
-        skill = "investigation" if option_index == SEARCH_INVESTIGATION_OPTION else "perception"
-        return SearchAction(actor_id=actor_id, skill=skill)
-
     if selected_main_action is MainActionType.USE_OBJECT:
         actor = state.character_at(actor_id)
         item = _item_for_option(actor, option_index)
@@ -849,22 +834,6 @@ def decode_action(
             ),
             shove_effect=shove_effect,
         )
-
-    if selected_main_action is MainActionType.STABILIZE:
-        return StabilizeAction(
-            actor_id=actor_id,
-            target_id=_target_or_first_valid(
-                target_index,
-                state,
-                actor_id,
-                lambda target_id, target: target_id != actor_id
-                and target.hp <= 0
-                and _distance(state.characters[actor_id].position, target.position, state) <= 1,
-            ),
-        )
-
-    if selected_main_action is MainActionType.IMPROVISED:
-        return ImprovisedAction(actor_id=actor_id)
 
     raise ValueError(f"Main action type {selected_main_action.name} is not implemented")
 
@@ -967,10 +936,6 @@ def _build_main_action_type_mask(
     )
     main_action_type_mask[int(MainActionType.HELP)] = _can_help(state, actor_id, actor)
     main_action_type_mask[int(MainActionType.HIDE)] = _can_hide(state, actor)
-    main_action_type_mask[int(MainActionType.SEARCH)] = _can_spend_action(
-        actor,
-        COMMON_ACTION_SEARCH,
-    )
     main_action_type_mask[int(MainActionType.USE_OBJECT)] = _has_usable_item(state, actor)
     main_action_type_mask[int(MainActionType.READY)] = _can_ready(actor)
     main_action_type_mask[int(MainActionType.GRAPPLE)] = _has_special_melee_target(
@@ -984,15 +949,6 @@ def _build_main_action_type_mask(
         actor_id,
         actor,
         COMMON_ACTION_SHOVE,
-    )
-    main_action_type_mask[int(MainActionType.STABILIZE)] = _has_stabilize_target(
-        state,
-        actor_id,
-        actor,
-    )
-    main_action_type_mask[int(MainActionType.IMPROVISED)] = _can_spend_action(
-        actor,
-        COMMON_ACTION_IMPROVISED,
     )
     return main_action_type_mask
 
@@ -1078,15 +1034,6 @@ def _build_target_mask(
     ):
         for target_id, target in enumerate(state.characters):
             if _is_special_melee_target(state, actor_id, actor, target_id, target):
-                target_mask[target_id] = True
-
-    if main_action_type_mask[int(MainActionType.STABILIZE)]:
-        for target_id, target in enumerate(state.characters):
-            if (
-                target_id != actor_id
-                and target.hp <= 0
-                and _distance(actor.position, target.position, state) <= 1
-            ):
                 target_mask[target_id] = True
 
     if main_action_type_mask[int(MainActionType.USE_OBJECT)]:
@@ -1209,10 +1156,6 @@ def _build_option_mask(
     if main_action_type_mask[int(MainActionType.SHOVE)]:
         option_mask[SHOVE_PRONE_OPTION] = True
         option_mask[SHOVE_PUSH_OPTION] = True
-
-    if main_action_type_mask[int(MainActionType.SEARCH)]:
-        option_mask[SEARCH_PERCEPTION_OPTION] = True
-        option_mask[SEARCH_INVESTIGATION_OPTION] = True
 
     if main_action_type_mask[int(MainActionType.USE_OBJECT)]:
         for object_index, item in enumerate(_available_items(actor)):
@@ -1436,12 +1379,9 @@ def _main_action_block_reason(
         MainActionType.DODGE,
         MainActionType.HELP,
         MainActionType.HIDE,
-        MainActionType.SEARCH,
         MainActionType.READY,
         MainActionType.GRAPPLE,
         MainActionType.SHOVE,
-        MainActionType.STABILIZE,
-        MainActionType.IMPROVISED,
     } and not actor.action_economy.action_available:
         return BLOCKED_NO_ACTION_AVAILABLE
 
@@ -1456,8 +1396,6 @@ def _main_action_block_reason(
     if action_type is MainActionType.READY and not actor.action_economy.reaction_available:
         return BLOCKED_NO_REACTION_AVAILABLE
     if action_type in {MainActionType.GRAPPLE, MainActionType.SHOVE}:
-        return BLOCKED_NO_VALID_TARGET
-    if action_type is MainActionType.STABILIZE:
         return BLOCKED_NO_VALID_TARGET
     if action_type is MainActionType.HELP:
         return BLOCKED_NO_VALID_TARGET
@@ -2359,21 +2297,6 @@ def _is_special_melee_target(
     )
 
 
-def _has_stabilize_target(
-    state: CombatState,
-    actor_id: int,
-    actor: Character,
-) -> bool:
-    if not _can_spend_action(actor, COMMON_ACTION_STABILIZE):
-        return False
-    return any(
-        target_id != actor_id
-        and target.hp <= 0
-        and _distance(actor.position, target.position, state) <= 1
-        for target_id, target in enumerate(state.characters)
-    )
-
-
 def _has_usable_item(state: CombatState, actor: Character) -> bool:
     return any(_item_option_is_valid(state, actor, item) for item in _available_items(actor))
 
@@ -2634,7 +2557,6 @@ def _main_action_uses_target(main_action_type: MainActionType) -> bool:
         MainActionType.HELP,
         MainActionType.GRAPPLE,
         MainActionType.SHOVE,
-        MainActionType.STABILIZE,
     }
 
 
@@ -2642,7 +2564,6 @@ def _main_action_uses_option(main_action_type: MainActionType) -> bool:
     return main_action_type in {
         MainActionType.ATTACK,
         MainActionType.CAST_SPELL,
-        MainActionType.SEARCH,
         MainActionType.USE_OBJECT,
         MainActionType.SHOVE,
     }

@@ -24,7 +24,8 @@ from combat.aoe import (
     positions_for_aoe,
 )
 from combat.common_actions import ActionResult
-from combat.replay import StateSnapshot
+
+StateSnapshot = dict[str, Any]
 
 
 MIN_ANIMATION_SPEED_MS = 300
@@ -79,6 +80,25 @@ def animation_duration_ms(speed_ms: int) -> int:
     """Return a short visual duration that leaves breathing room before next auto-step."""
 
     return max(160, int(normalize_animation_speed(speed_ms) * 0.72))
+
+
+def snapshot_battle_state(state: CombatState) -> StateSnapshot:
+    """Return the minimal pre-action state needed for presentation animations."""
+
+    return {
+        "characters": [
+            {
+                "id": character_id,
+                "hp": int(character.hp),
+                "alive": bool(character.is_alive),
+                "position": {
+                    "x": int(character.position.x),
+                    "y": int(character.position.y),
+                },
+            }
+            for character_id, character in enumerate(state.characters)
+        ]
+    }
 
 
 def build_battle_animations(

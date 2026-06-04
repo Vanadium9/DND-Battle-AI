@@ -81,13 +81,11 @@ COMMON_ACTION_DISENGAGE = "disengage"
 COMMON_ACTION_DODGE = "dodge"
 COMMON_ACTION_HELP = "help"
 COMMON_ACTION_HIDE = "hide"
-COMMON_ACTION_SEARCH = "search"
 COMMON_ACTION_USE_OBJECT = "use_object"
 COMMON_ACTION_READY = "ready"
 COMMON_ACTION_GRAPPLE = "grapple"
 COMMON_ACTION_SHOVE = "shove"
 COMMON_ACTION_STABILIZE = "stabilize"
-COMMON_ACTION_IMPROVISED = "improvised_action"
 COMMON_ACTION_OPPORTUNITY_ATTACK = "opportunity_attack"
 COMMON_ACTION_END_TURN = "end_turn"
 
@@ -912,43 +910,6 @@ class HideAction(CombatAction):
 
 
 @dataclass
-class SearchAction(CombatAction):
-    """Spend an action to make a Perception or Investigation check."""
-
-    skill: str = "perception"
-    dc: int = 10
-
-    def is_valid(self, combat_state: CombatState) -> bool:
-        return _can_spend_action(combat_state, self.actor_id, COMMON_ACTION_SEARCH)
-
-    def execute(self, combat_state: CombatState) -> ActionResult:
-        actor = _get_character(combat_state, self.actor_id)
-        if actor is None:
-            return ActionResult(False, f"Search failed: actor {self.actor_id} not found.")
-        if not self.is_valid(combat_state):
-            return ActionResult(False, f"{actor.name} cannot Search.")
-        actor.action_economy.spend_action()
-        skill = "investigation" if self.skill.lower() == "investigation" else "perception"
-        check = roll_ability_check(actor, skill, proficiency=True)
-        outcome = "succeeds" if check.total >= self.dc else "fails"
-        discovered = _discover_hidden_targets(combat_state, actor, check.total)
-        discovered_text = (
-            f" Revealed hidden targets: {', '.join(discovered)}."
-            if discovered
-            else ""
-        )
-        return ActionResult(
-            True,
-            (
-                f"{actor.name} Searches with {self.skill} and {outcome} "
-                f"({check.total} vs DC {self.dc}; {check.log}). "
-                f"{discovered_text}"
-                "Action spent: action_available=False."
-            ),
-        )
-
-
-@dataclass
 class UseObjectAction(CombatAction):
     """Spend an action to use a simple object if one is provided."""
 
@@ -1230,31 +1191,6 @@ class StabilizeAction(CombatAction):
             (
                 f"{actor.name} {outcome} {target.name} "
                 f"({check.total} vs DC {self.dc}; {check.log}). "
-                "Action spent: action_available=False."
-            ),
-        )
-
-
-@dataclass
-class ImprovisedAction(CombatAction):
-    """Placeholder for a custom improvised action."""
-
-    description: str = "improvised action"
-
-    def is_valid(self, combat_state: CombatState) -> bool:
-        return _can_spend_action(combat_state, self.actor_id, COMMON_ACTION_IMPROVISED)
-
-    def execute(self, combat_state: CombatState) -> ActionResult:
-        actor = _get_character(combat_state, self.actor_id)
-        if actor is None:
-            return ActionResult(False, f"Improvised action failed: actor {self.actor_id} not found.")
-        if not self.is_valid(combat_state):
-            return ActionResult(False, f"{actor.name} cannot improvise an action.")
-        actor.action_economy.spend_action()
-        return ActionResult(
-            True,
-            (
-                f"{actor.name} attempts an improvised action: {self.description}. "
                 "Action spent: action_available=False."
             ),
         )
@@ -1943,23 +1879,6 @@ def _can_hide_from_enemies(combat_state: CombatState, actor: Character) -> bool:
         is not CoverType.NO_COVER
         for enemy in enemies
     )
-
-
-def _discover_hidden_targets(
-    combat_state: CombatState,
-    actor: Character,
-    check_total: int,
-) -> list[str]:
-    if check_total < 10:
-        return []
-    discovered: list[str] = []
-    for target in combat_state.characters:
-        if target is actor or target.team == actor.team or not target.hidden:
-            continue
-        if _has_line_of_sight(combat_state, actor.position, target.position):
-            target.hidden = False
-            discovered.append(target.name)
-    return discovered
 
 
 def _weapon_attack_modifier(actor: Character, weapon: WeaponAttack) -> int:

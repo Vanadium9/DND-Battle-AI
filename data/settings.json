@@ -6,7 +6,6 @@
   "animations_enabled": true,
   "autobattle_delay": 600,
   "character_dir": "data/characters",
-  "replay_dir": "replays",
   "map_dir": "maps",
   "random_battle_seed": null
 }

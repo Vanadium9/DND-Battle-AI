@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-from pathlib import Path
-
 from PySide6.QtCore import QAbstractAnimation, Qt, QTimer, QVariantAnimation
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -21,7 +18,6 @@ from PySide6.QtWidgets import (
 
 from combat import (
     ActionResult,
-    BattleReplay,
     CombatAction,
     CombatEnvironment,
     EndTurnAction,
@@ -34,6 +30,7 @@ from ui.animations import (
     animation_duration_ms,
     build_battle_animations,
     normalize_animation_speed,
+    snapshot_battle_state,
 )
 from ui.services import (
     BattleSetupResult,
@@ -54,8 +51,6 @@ from ui.widgets import (
 from ui.widgets.screen import ScreenFrame
 
 
-DEFAULT_REPLAY_DIR = Path("replays")
-
 
 class BattleScreen(QWidget):
     """Show a tactical map and step a CombatEnvironment with GUI-selected AI."""
@@ -69,7 +64,6 @@ class BattleScreen(QWidget):
         self._model_service = model_service
         self._setup_result: BattleSetupResult | None = None
         self._environment: CombatEnvironment | None = None
-        self._replay: BattleReplay | None = None
         self._selected_creature_id: int | None = None
         self._manual_action_builder = ManualActionBuilder()
         self._manual_plan: ManualActionPlan | None = None
@@ -102,7 +96,6 @@ class BattleScreen(QWidget):
         self._auto_button = QPushButton("Автобой")
         self._pause_button = QPushButton("Пауза")
         self._finish_button = QPushButton("Завершить бой")
-        self._save_replay_button = QPushButton("Сохранить реплей")
         self._animations_checkbox = QCheckBox("Анимации")
         self._animations_checkbox.setChecked(self._model_service.settings.animations_enabled)
         self._animation_speed_spin = QSpinBox()
@@ -127,16 +120,6 @@ class BattleScreen(QWidget):
         self._manual_plan = None
         self._finished_manually = False
         self._winner_logged = False
-        self._replay = BattleReplay(
-            metadata={
-                "source": "gui",
-                "summary": setup_result.summary,
-                "map": setup_result.map_name,
-                "difficulty": setup_result.difficulty,
-                "controller_mode": setup_result.controller_mode,
-                "seed": setup_result.seed,
-            }
-        )
         self.refresh()
 
     def refresh(self) -> None:
@@ -207,7 +190,6 @@ class BattleScreen(QWidget):
         layout.addWidget(self._auto_button)
         layout.addWidget(self._pause_button)
         layout.addWidget(self._finish_button)
-        layout.addWidget(self._save_replay_button)
         layout.addSpacing(16)
         layout.addWidget(self._animations_checkbox)
         layout.addWidget(QLabel("Задержка"))
@@ -255,7 +237,6 @@ class BattleScreen(QWidget):
         self._auto_button.clicked.connect(self._start_auto_battle)
         self._pause_button.clicked.connect(self._pause_auto_battle)
         self._finish_button.clicked.connect(self._finish_battle)
-        self._save_replay_button.clicked.connect(self._save_replay)
         self._animations_checkbox.stateChanged.connect(self._save_animation_settings)
         self._animation_speed_spin.valueChanged.connect(self._save_animation_settings)
         self._action_panel.option_selected.connect(self._select_manual_option)
@@ -294,7 +275,7 @@ class BattleScreen(QWidget):
             self.refresh()
             return
 
-        before = self._replay.snapshot_state(self._environment.combat_state) if self._replay else None
+        before = snapshot_battle_state(self._environment.combat_state)
         try:
             action = self._model_service.select_action(
                 self._environment.combat_state,
@@ -309,8 +290,6 @@ class BattleScreen(QWidget):
 
         self._environment.action_log.append(f"Выбранное действие: {_describe_action(action)}")
         result = self._environment.step(action)
-        if self._replay is not None and before is not None:
-            self._replay.record_step(before, self._environment.combat_state, action, result)
         self._selected_creature_id = self._environment.combat_state.active_actor_id
         self.refresh()
         self._play_step_animation(before, action, result)
@@ -346,15 +325,6 @@ class BattleScreen(QWidget):
         self._environment.action_log.append("Бой завершён вручную.")
         self.refresh()
 
-    def _save_replay(self) -> None:
-        if self._replay is None:
-            QMessageBox.information(self, "Реплей", "Нет активного боя для сохранения.")
-            return
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        replay_dir = Path(self._model_service.settings.replay_dir or DEFAULT_REPLAY_DIR)
-        path = self._replay.save(replay_dir / f"gui_battle_{timestamp}.json")
-        QMessageBox.information(self, "Реплей сохранён", f"Реплей сохранён: {path}")
-
     def _select_creature(self, creature_id: int) -> None:
         self._selected_creature_id = creature_id
         self.refresh()
@@ -368,7 +338,6 @@ class BattleScreen(QWidget):
         self._auto_button.setEnabled(can_step and not self._timer.isActive())
         self._pause_button.setEnabled(active and self._timer.isActive())
         self._finish_button.setEnabled(active and not done)
-        self._save_replay_button.setEnabled(self._replay is not None)
         self._animations_checkbox.setEnabled(True)
         self._animation_speed_spin.setEnabled(True)
 
@@ -461,7 +430,7 @@ class BattleScreen(QWidget):
     def _execute_selected_action(self, action: CombatAction, *, prefix: str) -> None:
         if self._environment is None:
             return
-        before = self._replay.snapshot_state(self._environment.combat_state) if self._replay else None
+        before = snapshot_battle_state(self._environment.combat_state)
         self._environment.action_log.append(f"{prefix}: {_describe_action(action)}")
         previous_auto_end_turn = self._environment.auto_end_turn_enabled
         self._environment.auto_end_turn_enabled = isinstance(action, EndTurnAction)
@@ -469,8 +438,6 @@ class BattleScreen(QWidget):
             result = self._environment.step(action)
         finally:
             self._environment.auto_end_turn_enabled = previous_auto_end_turn
-        if self._replay is not None and before is not None:
-            self._replay.record_step(before, self._environment.combat_state, action, result)
         self._selected_creature_id = self._environment.combat_state.active_actor_id
         self.refresh()
         self._play_step_animation(before, action, result)
