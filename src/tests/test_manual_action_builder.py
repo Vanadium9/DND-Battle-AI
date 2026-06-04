@@ -24,7 +24,7 @@ def test_manual_builder_exposes_legal_movement_attack_and_end_turn() -> None:
     plan = builder.build_plan(state, actor_id=0)
 
     assert "Movement" in plan.groups
-    assert "Main Action" in plan.groups
+    assert "Attack Abilities" in plan.groups
     assert "End Turn" in plan.groups
 
     move_option = plan.groups["Movement"][0]
@@ -39,7 +39,7 @@ def test_manual_builder_exposes_legal_movement_attack_and_end_turn() -> None:
 
     attack_option = next(
         option
-        for option in plan.groups["Main Action"]
+        for option in plan.groups["Attack Abilities"]
         if option.label.startswith("Attack:")
     )
     assert attack_option.target_mode is ManualTargetMode.CREATURE
@@ -60,7 +60,7 @@ def test_manual_builder_rejects_illegal_manual_target() -> None:
     plan = builder.build_plan(state, actor_id=0)
     attack_option = next(
         option
-        for option in plan.groups["Main Action"]
+        for option in plan.groups["Attack Abilities"]
         if option.label.startswith("Attack:")
     )
 
@@ -81,7 +81,7 @@ def test_manual_builder_exposes_spell_slot_and_aoe_cell_options() -> None:
     plan = builder.build_plan(state, actor_id=0)
     fireball_option = next(
         option
-        for option in plan.groups["Main Action"]
+        for option in plan.groups["Spells"]
         if "Fireball" in option.label
     )
 

@@ -42,6 +42,7 @@ from combat.map_config import (
 )
 from combat.race_traits import RaceTraits
 from combat.spellcasting import resolve_spell_list
+from ui.text import ru_sentence
 
 
 DIFFICULTIES: dict[str, str] = {
@@ -71,6 +72,14 @@ PARTY_PRESETS: dict[str, str] = {
     "fighter_level_1": "Воин 1 уровня",
     "fighter_archer_level_5": "Воин-чемпион лучник 5 уровня",
     "balanced_level_5": "Воин + Жрец + Волшебник 5 уровня",
+}
+
+
+MAP_LABELS: dict[str, str] = {
+    "open_field": "Открытое поле",
+    "cover_arena": "Арена с укрытиями",
+    "difficult_terrain_pass": "Перевал со сложной местностью",
+    "obstacle_corridor": "Коридор с препятствиями",
 }
 
 
@@ -123,6 +132,10 @@ class BattleSetupService:
 
     def maps(self) -> dict[str, str]:
         options = map_options(self.map_dir)
+        options = {
+            key: _map_label(key, fallback=label)
+            for key, label in options.items()
+        }
         if options:
             options["random"] = "Случайная карта"
         return options
@@ -142,7 +155,7 @@ class BattleSetupService:
         return _format_summary(
             party_names=party_names,
             enemy_names=enemy_names,
-            map_name=resolved_map,
+            map_name=_map_label(resolved_map),
             difficulty=_label(DIFFICULTIES, request.difficulty),
             controller_mode=_label(CONTROLLER_MODES, request.controller_mode),
             seed=request.seed,
@@ -165,13 +178,13 @@ class BattleSetupService:
             log_to_console=False,
         )
         party_names = tuple(character.name for character in party)
-        enemy_names = tuple(character.name for character in enemies)
+        enemy_names = tuple(ru_sentence(character.name) for character in enemies)
         difficulty_label = _label(DIFFICULTIES, request.difficulty)
         controller_label = _label(CONTROLLER_MODES, request.controller_mode)
         summary = _format_summary(
             party_names=party_names,
             enemy_names=enemy_names,
-            map_name=resolved_map_name,
+            map_name=_map_label(resolved_map_name),
             difficulty=difficulty_label,
             controller_mode=controller_label,
             seed=request.seed,
@@ -180,7 +193,7 @@ class BattleSetupService:
             environment=environment,
             party_names=party_names,
             enemy_names=enemy_names,
-            map_name=resolved_map_name,
+            map_name=_map_label(resolved_map_name),
             difficulty=difficulty_label,
             controller_mode=request.controller_mode,
             seed=request.seed,
@@ -266,7 +279,7 @@ class BattleSetupService:
         group_key = request.enemy_group
         if group_key == "auto":
             group_key = _auto_enemy_group(request.difficulty, party_size)
-        return tuple(character.name for character in _enemy_group_characters(group_key))
+        return tuple(ru_sentence(character.name) for character in _enemy_group_characters(group_key))
 
     @staticmethod
     def _place_characters(
@@ -487,6 +500,10 @@ def _format_summary(
 
 def _label(options: dict[str, str], key: str) -> str:
     return options.get(key, key)
+
+
+def _map_label(key: str, *, fallback: str | None = None) -> str:
+    return MAP_LABELS.get(normalize_map_key(key), fallback or key)
 
 
 def _key(value: object) -> str:

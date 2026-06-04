@@ -22,10 +22,18 @@ class CombatLogWidget(QGroupBox):
         layout.addWidget(self._text)
 
     def set_entries(self, entries: Iterable[str]) -> None:
-        self._text.setPlainText("\n".join(translate_battle_log(entry) for entry in entries))
+        self._text.setPlainText(
+            "\n".join(
+                translate_battle_log(entry)
+                for entry in entries
+                if _is_visible_log_entry(entry)
+            )
+        )
         self.scroll_to_bottom()
 
     def append_entry(self, entry: str) -> None:
+        if not _is_visible_log_entry(entry):
+            return
         entry = translate_battle_log(entry)
         if self._text.toPlainText():
             self._text.appendPlainText(entry)
@@ -39,3 +47,8 @@ class CombatLogWidget(QGroupBox):
 
     def text(self) -> str:
         return self._text.toPlainText()
+
+
+def _is_visible_log_entry(entry: object) -> bool:
+    text = str(entry).strip()
+    return not text.startswith("Reward breakdown:")

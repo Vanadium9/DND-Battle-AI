@@ -5,11 +5,10 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QAbstractAnimation, QTimer, QVariantAnimation
+from PySide6.QtCore import QAbstractAnimation, Qt, QTimer, QVariantAnimation
 from PySide6.QtWidgets import (
     QCheckBox,
     QFrame,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QMessageBox,
@@ -50,7 +49,6 @@ from ui.widgets import (
     ActionPanel,
     BattleMapWidget,
     CombatLogWidget,
-    CreatureStatusPanel,
     InitiativePanel,
 )
 from ui.widgets.screen import ScreenFrame
@@ -84,10 +82,10 @@ class BattleScreen(QWidget):
         self._active_label = QLabel("")
         self._map_widget = BattleMapWidget()
         self._initiative_panel = InitiativePanel()
-        self._status_panel = CreatureStatusPanel()
         self._action_panel = ActionPanel()
         self._combat_resources_label = QLabel("")
         self._combat_resources_label.setWordWrap(True)
+        self._combat_resources_label.setTextFormat(Qt.TextFormat.RichText)
         self._combat_resources_label.setObjectName("battleResourcesLabel")
         self._log_widget = CombatLogWidget()
         self._timer = QTimer(self)
@@ -149,7 +147,6 @@ class BattleScreen(QWidget):
             self._map_widget.set_manual_click_mode(False)
             self._map_widget.set_manual_highlights()
             self._initiative_panel.set_environment(None)
-            self._status_panel.set_environment(None)
             self._action_panel.set_viewer_mode("Бой не запущен.")
             self._combat_resources_label.setText("")
             self._log_widget.set_entries(())
@@ -164,10 +161,6 @@ class BattleScreen(QWidget):
         self._map_widget.set_environment(self._environment)
         self._map_widget.set_selected_creature_id(self._selected_creature_id)
         self._initiative_panel.set_environment(
-            self._environment,
-            self._selected_creature_id,
-        )
-        self._status_panel.set_environment(
             self._environment,
             self._selected_creature_id,
         )
@@ -224,12 +217,11 @@ class BattleScreen(QWidget):
 
     def _side_panel(self) -> QWidget:
         panel = QWidget()
-        panel.setMinimumWidth(300)
+        panel.setMinimumWidth(220)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(8, 0, 0, 0)
         layout.setSpacing(8)
         layout.addWidget(self._initiative_panel, stretch=1)
-        layout.addWidget(self._status_panel, stretch=3)
         return panel
 
     def _bottom_panel(self) -> QWidget:
@@ -237,15 +229,24 @@ class BattleScreen(QWidget):
         layout = QHBoxLayout(panel)
         layout.setContentsMargins(0, 8, 0, 0)
         layout.setSpacing(8)
-        layout.addWidget(self._action_panel, stretch=3)
-        layout.addWidget(self._combat_resources_panel(), stretch=1)
+
+        action_column = QWidget()
+        action_layout = QVBoxLayout(action_column)
+        action_layout.setContentsMargins(0, 0, 0, 0)
+        action_layout.setSpacing(4)
+        action_layout.addWidget(self._combat_resources_panel(), stretch=0)
+        action_layout.addWidget(self._action_panel, stretch=1)
+
+        layout.addWidget(action_column, stretch=3)
         layout.addWidget(self._log_widget, stretch=2)
         return panel
 
-    def _combat_resources_panel(self) -> QGroupBox:
-        group = QGroupBox("Р РµСЃСѓСЂСЃС‹ С…РѕРґР°")
+    def _combat_resources_panel(self) -> QFrame:
+        group = QFrame()
+        group.setObjectName("battleResourcesStrip")
+        group.setMaximumHeight(46)
         layout = QVBoxLayout(group)
-        layout.setContentsMargins(10, 14, 10, 10)
+        layout.setContentsMargins(6, 4, 6, 4)
         layout.addWidget(self._combat_resources_label)
         return group
 
@@ -462,7 +463,12 @@ class BattleScreen(QWidget):
             return
         before = self._replay.snapshot_state(self._environment.combat_state) if self._replay else None
         self._environment.action_log.append(f"{prefix}: {_describe_action(action)}")
-        result = self._environment.step(action)
+        previous_auto_end_turn = self._environment.auto_end_turn_enabled
+        self._environment.auto_end_turn_enabled = isinstance(action, EndTurnAction)
+        try:
+            result = self._environment.step(action)
+        finally:
+            self._environment.auto_end_turn_enabled = previous_auto_end_turn
         if self._replay is not None and before is not None:
             self._replay.record_step(before, self._environment.combat_state, action, result)
         self._selected_creature_id = self._environment.combat_state.active_actor_id
@@ -616,7 +622,7 @@ class BattleScreen(QWidget):
             return f"Бой завершён. Победитель: {winner_text}."
         state = self._environment.combat_state
         actor = state.active_character
-        actor_text = actor.name if actor is not None else "none"
+        actor_text = ru_sentence(actor.name) if actor is not None else "none"
         return f"Раунд {state.round_number}. Активный участник: {actor_text}."
 
 
@@ -641,44 +647,59 @@ def _active_resources_text(environment: CombatEnvironment) -> str:
     state = environment.combat_state
     actor = state.active_character
     if actor is None:
-        return "Нет активного участника."
+        return "<span style='color:#6b7280;'>Нет активного участника</span>"
 
     economy = actor.action_economy
-    lines = [
-        actor.name,
-        "",
-        f"Действие: {_yes_no(economy.action_available)}",
-        f"Бонусное действие: {_yes_no(economy.bonus_action_available)}",
-        f"Реакция: {_yes_no(economy.reaction_available)}",
-        f"Перемещение: {economy.movement_remaining}/{actor.speed}",
+    markers = [
+        _resource_marker("●", "Д", economy.action_available, "#2f9e44"),
+        _resource_marker("■", "Б", economy.bonus_action_available, "#f08c00"),
+        _resource_marker("◆", "Р", economy.reaction_available, "#1c7ed6"),
+        _resource_marker(
+            "▲",
+            f"{economy.movement_remaining}/{actor.speed}",
+            economy.movement_remaining > 0,
+            "#0ca678",
+        ),
     ]
 
     spell_slots = getattr(actor, "spell_slots", {}) or {}
     if spell_slots:
         remaining = getattr(actor, "spell_slots_remaining", {}) or {}
-        lines.append("")
-        lines.append("Ячейки заклинаний:")
         for level in sorted(spell_slots):
-            lines.append(f"- {level}: {remaining.get(level, 0)}/{spell_slots[level]}")
+            current = remaining.get(level, 0)
+            maximum = spell_slots[level]
+            markers.append(_resource_marker("◇", f"{level}:{current}/{maximum}", current > 0, "#7048e8"))
 
     resources = getattr(actor, "resources", {}) or {}
     if resources:
-        lines.append("")
-        lines.append("Ресурсы класса:")
         for name, resource in resources.items():
             current = getattr(resource, "uses_remaining", resource)
             maximum = getattr(resource, "max_uses", current)
-            lines.append(f"- {ru_sentence(name)}: {current}/{maximum}")
+            label = f"{ru_sentence(name)} {current}/{maximum}"
+            markers.append(_resource_marker("⬟", label, int(current) > 0, "#9c36b5"))
 
     prepared_action = getattr(actor, "prepared_action", None)
+    prepared = ""
     if prepared_action:
-        lines.append("")
-        lines.append(f"Подготовлено: {ru_sentence(prepared_action)}")
-    return "\n".join(lines)
+        prepared = (
+            "<span style='color:#334155; font-size:11px;'>"
+            f"Подготовлено: {ru_sentence(prepared_action)}</span>"
+        )
+    return (
+        "<div style='font-size:12px; line-height:1.35;'>"
+        f"<div>{' '.join(markers)}</div>"
+        f"{prepared}"
+        "</div>"
+    )
 
 
-def _yes_no(value: bool) -> str:
-    return "есть" if value else "нет"
+def _resource_marker(symbol: str, label: str, available: bool, color: str) -> str:
+    marker_color = color if available else "#a8b0ba"
+    label_color = "#253549" if available else "#7b8794"
+    return (
+        f"<span style='color:{marker_color}; font-size:16px; font-weight:800;'>{symbol}</span>"
+        f"<span style='color:{label_color}; font-size:11px; font-weight:700;'>{label}</span>"
+    )
 
 
 def _actor_is_manual_controlled(

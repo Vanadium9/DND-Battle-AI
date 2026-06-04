@@ -28,7 +28,8 @@ def test_preset_random_battle_creates_environment_with_spawned_sides() -> None:
 
     assert len(players) == 3
     assert len(enemies) >= 3
-    assert result.map_name == "cover_arena"
+    assert result.map_name == "Арена с укрытиями"
+    assert service.maps()["cover_arena"] == "Арена с укрытиями"
     assert result.difficulty == "Сложный"
     assert "Отряд:" in result.summary
     assert "Враги:" in result.summary

@@ -9,6 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QPushButton, QScrollArea
 
 from character import CharacterRepository, InternalCharacter
 from combat import CombatEnvironment, FighterLevel1Basic, GoblinMelee, GridMap, Position
@@ -17,6 +18,7 @@ from ui.main_window import MainWindow
 from ui.navigation import NAVIGATION_ITEMS
 from ui.screens import BattleScreen, CharacterBuilderScreen
 from ui.services import BattleSetupRequest, BattleSetupResult, BattleSetupService, ModelService
+from ui.text import translate_battle_log
 from ui.widgets.inventory_editor import InventoryEditor
 from ui.widgets.stat_editor import StatEditor
 
@@ -86,6 +88,7 @@ def test_editor_widgets_emit_zero_argument_signals() -> None:
     stat_editor.stats_changed.connect(lambda: stat_emissions.append(True))
 
     stat_editor._spin_boxes["str"].setValue(12)
+    stat_editor._spin_boxes["dex"].setValue(20)
     stat_editor.set_proficiency_context(
         proficiency_bonus=2,
         saving_throw_proficiencies=("str", "con"),
@@ -99,6 +102,7 @@ def test_editor_widgets_emit_zero_argument_signals() -> None:
 
     assert stat_emissions
     assert inventory_emissions
+    assert stat_editor.stats()["dex"] == 20
     assert stat_editor._save_labels["str"].text() == "+3"
     assert stat_editor._save_labels["dex"].text() == "-"
 
@@ -126,9 +130,13 @@ def test_battle_screen_accepts_setup_result_and_steps_ai() -> None:
 
     assert screen._environment is setup_result.environment
     assert screen._map_widget._environment is setup_result.environment
+    assert not hasattr(screen, "_status_panel")
+    assert screen._action_panel.minimumWidth() <= 220
+    assert "●" in screen._combat_resources_label.text()
     assert screen._replay is not None
     assert len(screen._replay.steps) == 1
-    assert "Выбранное действие:" in "\n".join(screen._environment.action_log)
+    assert screen._environment.action_log
+    assert "Reward breakdown:" not in screen._log_widget.text()
 
     screen.close()
     app.processEvents()
@@ -162,6 +170,18 @@ def test_battle_screen_manual_player_can_end_turn() -> None:
     screen.set_battle(setup_result)
     assert screen._manual_plan is not None
     assert not screen._next_button.isEnabled()
+    assert not screen._action_panel.findChildren(QScrollArea)
+    action_buttons = [
+        button
+        for button in screen._action_panel.findChildren(QPushButton)
+        if button.objectName() == "compactActionButton"
+    ]
+    assert action_buttons
+    assert all(button.width() == 32 and button.height() == 32 for button in action_buttons)
+    assert any(button.toolTip() for button in action_buttons)
+    assert any(not button.isEnabled() for button in action_buttons)
+    assert any("Атака" in button.toolTip() for button in action_buttons)
+    assert not any("Attack" in button.toolTip() for button in action_buttons)
 
     end_turn = screen._manual_plan.groups["End Turn"][0]
     screen._select_manual_option(end_turn)
@@ -173,6 +193,55 @@ def test_battle_screen_manual_player_can_end_turn() -> None:
 
     screen.close()
     app.processEvents()
+
+
+def test_manual_action_does_not_auto_end_turn() -> None:
+    app = create_app(["test_gui_manual_no_auto_end_turn"])
+    settings_path = Path("checkpoints") / f"test_gui_model_settings_{uuid4().hex}.json"
+    model_service = ModelService(settings_path=settings_path)
+    environment = CombatEnvironment(
+        characters=[
+            FighterLevel1Basic(Position(0, 0)),
+            GoblinMelee(Position(1, 0)),
+        ],
+        grid_map=GridMap(width=5, height=5),
+        use_initiative=False,
+        log_to_console=False,
+    )
+    setup_result = BattleSetupResult(
+        environment=environment,
+        party_names=("Fighter Level 1 Basic",),
+        enemy_names=("Goblin",),
+        map_name="open_field",
+        difficulty="easy",
+        controller_mode="manual_players_ai_enemies",
+        seed=None,
+        summary="Manual no auto end test battle",
+    )
+    screen = BattleScreen(model_service)
+
+    screen.set_battle(setup_result)
+    attack = next(
+        option
+        for option in screen._manual_plan.options
+        if option.id.startswith("attack:")
+    )
+    screen._select_manual_option(attack)
+    screen._handle_manual_cell_clicked(Position(1, 0))
+
+    assert environment.combat_state.active_actor_id == 0
+
+    screen.close()
+    app.processEvents()
+
+
+def test_battle_log_translates_monster_names() -> None:
+    text = translate_battle_log("Goblin Archer attacks Orc Warrior with Shortbow.")
+
+    assert "Goblin Archer" not in text
+    assert "Orc Warrior" not in text
+    assert "Гоблин-лучник" in text
+    assert "Орк-воин" in text
 
 
 def test_battle_screen_click_prefers_alive_target_over_corpse() -> None:

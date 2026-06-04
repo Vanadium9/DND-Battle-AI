@@ -15,7 +15,11 @@ from agents import (
     SimpleHealerAgent,
 )
 from combat import CombatAction, CombatState
-from inference.action_selector import select_action_with_policy, select_fallback_action
+from inference.action_selector import (
+    ActionSelectionError,
+    select_action_with_policy,
+    select_fallback_action,
+)
 from inference.policy_loader import LoadedPolicy, load_policy_checkpoint
 
 
@@ -103,12 +107,20 @@ class BattleAIService:
                 actor_id,
                 deterministic=False,
             )
-        return select_action_with_policy(
-            self._loaded_policy,
-            combat_state,
-            actor_id,
-            deterministic=True,
-        )
+        try:
+            return select_action_with_policy(
+                self._loaded_policy,
+                combat_state,
+                actor_id,
+                deterministic=True,
+            )
+        except ActionSelectionError:
+            return select_fallback_action(
+                self._fallback_agent,
+                combat_state,
+                actor_id,
+                deterministic=False,
+            )
 
     def get_policy_name(self) -> str:
         if self._loaded_policy is not None:

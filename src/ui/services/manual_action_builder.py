@@ -30,9 +30,7 @@ from combat.aoe import (
 from combat.class_features import implemented_feature_active_actions
 from combat.items import (
     CombatItem,
-    ItemActionCost,
     item_has_quantity,
-    normalize_action_cost,
     resolve_item,
     supported_item_aoe_shape,
 )
@@ -90,9 +88,9 @@ class ManualActionBuilder:
     """Create and validate GUI manual actions from action masks."""
 
     GROUP_MOVEMENT = "Movement"
-    GROUP_MAIN = "Main Action"
-    GROUP_BONUS = "Bonus Action"
-    GROUP_REACTION = "Reaction"
+    GROUP_ATTACK = "Attack Abilities"
+    GROUP_SPELLS = "Spells"
+    GROUP_INVENTORY = "Inventory"
     GROUP_END_TURN = "End Turn"
 
     def build_plan(self, state: CombatState, actor_id: int) -> ManualActionPlan:
@@ -103,9 +101,9 @@ class ManualActionBuilder:
         masks = build_action_masks(state, actor_id)
         groups: dict[str, list[ManualActionOption]] = {
             self.GROUP_MOVEMENT: [],
-            self.GROUP_MAIN: [],
-            self.GROUP_BONUS: [],
-            self.GROUP_REACTION: [],
+            self.GROUP_ATTACK: [],
+            self.GROUP_SPELLS: [],
+            self.GROUP_INVENTORY: [],
             self.GROUP_END_TURN: [],
         }
 
@@ -247,10 +245,10 @@ class ManualActionBuilder:
                     )
                 )
                 if targets:
-                    groups[self.GROUP_MAIN].append(
+                    groups[self.GROUP_ATTACK].append(
                         ManualActionOption(
                             id=f"attack:{weapon_index}",
-                            group=self.GROUP_MAIN,
+                            group=self.GROUP_ATTACK,
                             label=f"Attack: {weapon.name}",
                             target_mode=ManualTargetMode.CREATURE,
                             target_ids=targets,
@@ -292,10 +290,16 @@ class ManualActionBuilder:
                 option_index=option_index,
             ):
                 continue
-            groups[self.GROUP_MAIN].append(
+            if main_action in MOVEMENT_GROUP_ACTIONS:
+                group = self.GROUP_MOVEMENT
+            elif main_action in ATTACK_GROUP_ACTIONS:
+                group = self.GROUP_ATTACK
+            else:
+                group = self.GROUP_SPELLS
+            groups[group].append(
                 ManualActionOption(
                     id=f"main:{main_action.name}:{option_index}",
-                    group=self.GROUP_MAIN,
+                    group=group,
                     label=label,
                     category=ActionCategory.MAIN_ACTION,
                     main_action_type=main_action,
@@ -335,10 +339,10 @@ class ManualActionBuilder:
             )
             if not targets:
                 continue
-            groups[self.GROUP_MAIN].append(
+            groups[self.GROUP_ATTACK].append(
                 ManualActionOption(
                     id=f"main:{main_action.name}:{option_index}",
-                    group=self.GROUP_MAIN,
+                    group=self.GROUP_ATTACK,
                     label=label,
                     target_mode=ManualTargetMode.CREATURE,
                     target_ids=targets,
@@ -358,9 +362,9 @@ class ManualActionBuilder:
         masks: dict[str, torch.Tensor],
     ) -> None:
         spell_specs = (
-            ("action", self.GROUP_MAIN, ActionCategory.MAIN_ACTION),
-            ("bonus_action", self.GROUP_BONUS, ActionCategory.BONUS_ACTION),
-            ("reaction", self.GROUP_REACTION, ActionCategory.REACTION),
+            ("action", self.GROUP_SPELLS, ActionCategory.MAIN_ACTION),
+            ("bonus_action", self.GROUP_SPELLS, ActionCategory.BONUS_ACTION),
+            ("reaction", self.GROUP_SPELLS, ActionCategory.REACTION),
         )
         for action_cost, group, category in spell_specs:
             if not _mask_allowed(masks["action_category"], category):
@@ -396,7 +400,7 @@ class ManualActionBuilder:
         for item_index, item in enumerate(_available_items(actor)):
             if not _mask_allowed(masks["option_index"], item_index):
                 continue
-            group = _group_for_item(item)
+            group = self.GROUP_INVENTORY
             option = self._item_option(state, actor_id, item, item_index, group)
             if option is not None:
                 groups[group].append(option)
@@ -413,10 +417,10 @@ class ManualActionBuilder:
             if "second_wind" in implemented_feature_active_actions(actor, "bonus_action"):
                 action = SecondWindAction(actor_id=actor_id)
                 if action.is_valid(state):
-                    groups[self.GROUP_BONUS].append(
+                    groups[self.GROUP_SPELLS].append(
                         ManualActionOption(
                             id="feature:second_wind",
-                            group=self.GROUP_BONUS,
+                            group=self.GROUP_SPELLS,
                             label="Second Wind",
                             metadata={"kind": "second_wind"},
                         )
@@ -427,10 +431,10 @@ class ManualActionBuilder:
 
         action_surge = ActionSurgeAction(actor_id=actor_id)
         if action_surge.is_valid(state):
-            groups[self.GROUP_MAIN].append(
+            groups[self.GROUP_SPELLS].append(
                 ManualActionOption(
                     id="feature:action_surge",
-                    group=self.GROUP_MAIN,
+                    group=self.GROUP_SPELLS,
                     label="Class Feature: Action Surge",
                     category=ActionCategory.CLASS_FEATURE,
                     metadata={"kind": "action_surge"},
@@ -446,10 +450,10 @@ class ManualActionBuilder:
             ).is_valid(state)
         )
         if preserve_life_targets:
-            groups[self.GROUP_MAIN].append(
+            groups[self.GROUP_SPELLS].append(
                 ManualActionOption(
                     id="feature:preserve_life",
-                    group=self.GROUP_MAIN,
+                    group=self.GROUP_SPELLS,
                     label="Class Feature: Preserve Life",
                     target_mode=ManualTargetMode.CREATURE,
                     target_ids=preserve_life_targets,
@@ -920,6 +924,23 @@ def _position_index(state: CombatState, position: Position) -> int:
     return position.y * state.grid_map.width + position.x
 
 
+ATTACK_GROUP_ACTIONS = {
+    MainActionType.ATTACK,
+    MainActionType.HELP,
+    MainActionType.GRAPPLE,
+    MainActionType.SHOVE,
+    MainActionType.STABILIZE,
+    MainActionType.SEARCH,
+}
+
+MOVEMENT_GROUP_ACTIONS = {
+    MainActionType.DASH,
+    MainActionType.DISENGAGE,
+    MainActionType.DODGE,
+    MainActionType.HIDE,
+}
+
+
 def _position_from_index(state: CombatState, index: int) -> Position:
     if state.grid_map is None:
         raise ValueError("Нет карты для выбора клетки.")
@@ -950,15 +971,6 @@ def _available_items(actor: Character) -> tuple[CombatItem, ...]:
         if item is not None and item.implemented and item_has_quantity(item):
             items.append(item)
     return tuple(items)
-
-
-def _group_for_item(item: CombatItem) -> str:
-    cost = normalize_action_cost(item.action_cost)
-    if cost is ItemActionCost.BONUS_ACTION:
-        return ManualActionBuilder.GROUP_BONUS
-    if cost is ItemActionCost.REACTION:
-        return ManualActionBuilder.GROUP_REACTION
-    return ManualActionBuilder.GROUP_MAIN
 
 
 def _in_bounds(state: CombatState, positions: set[Position]) -> set[Position]:

@@ -6,7 +6,8 @@ import torch
 
 from agents import ActionCategory, GNNPPOActorCritic, PPOActorCritic, build_action_masks
 from combat import CombatState, EndTurnAction, FighterArcher, Goblin, GridMap, Position
-from inference import BattleAIService, CheckpointLoadError
+from inference import ActionSelectionError, BattleAIService, CheckpointLoadError
+import inference.battle_ai as battle_ai_module
 from ui.services import ModelService
 
 
@@ -56,6 +57,22 @@ def test_loaded_gnn_model_is_used_for_action_selection() -> None:
     assert service.is_model_loaded()
     assert "GNN PPO" in service.get_policy_name()
     assert isinstance(action, EndTurnAction)
+
+
+def test_loaded_policy_illegal_action_falls_back_to_legal_action(monkeypatch) -> None:
+    checkpoint_path = _checkpoint_path("illegal_policy")
+    model = _end_turn_mlp_model()
+    torch.save({"model_state_dict": model.state_dict()}, checkpoint_path)
+    service = BattleAIService(seed=7)
+    service.load_checkpoint(checkpoint_path, "mlp")
+
+    def fail_policy(*_args, **_kwargs):
+        raise ActionSelectionError("illegal test action")
+
+    monkeypatch.setattr(battle_ai_module, "select_action_with_policy", fail_policy)
+    action = service.select_action(_state(), actor_id=0)
+
+    assert action.is_valid(_state())
 
 
 def test_model_service_loads_checkpoint_for_gui_settings() -> None:

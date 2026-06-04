@@ -78,6 +78,7 @@ class CombatEnvironment:
         self.action_log: list[str] = []
         self.xp_awarded = False
         self.last_awarded_xp = 0
+        self.auto_end_turn_enabled = True
         self.reset()
 
     def reset(self) -> CombatState:
@@ -148,8 +149,14 @@ class CombatEnvironment:
         self._record_result(result)
         if isinstance(action, EndTurnAction) and result.success:
             self._record_turn_transition(before_round)
-        if not isinstance(action, EndTurnAction) and result.success:
+        if (
+            self.auto_end_turn_enabled
+            and not isinstance(action, EndTurnAction)
+            and result.success
+        ):
             self._auto_end_turn_if_actor_has_no_actions(action.actor_id)
+        if result.success:
+            self._skip_unavailable_active_actor()
         if result.success and self.is_done():
             self._award_xp_if_combat_complete()
             self.combat_state.reset_combat_resources()

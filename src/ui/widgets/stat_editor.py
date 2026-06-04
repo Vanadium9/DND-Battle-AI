@@ -23,6 +23,8 @@ ABILITY_LABELS: dict[str, str] = {
 }
 
 POINT_BUY_BUDGET = 27
+STAT_MIN = 8
+STAT_MAX = 20
 POINT_BUY_COSTS: dict[int, int] = {
     8: 0,
     9: 1,
@@ -65,7 +67,7 @@ class StatEditor(QWidget):
         """Return remaining point-buy budget before racial bonuses."""
 
         spent = sum(
-            POINT_BUY_COSTS.get(spin_box.value(), 0)
+            _point_buy_cost(spin_box.value())
             for spin_box in self._spin_boxes.values()
         )
         return POINT_BUY_BUDGET - spent
@@ -76,7 +78,7 @@ class StatEditor(QWidget):
         changed = False
         for ability, spin_box in self._spin_boxes.items():
             bonus = int(self._racial_bonuses.get(ability, 0))
-            value = max(8, min(15, int(stats.get(ability, 8)) - bonus))
+            value = max(STAT_MIN, min(STAT_MAX, int(stats.get(ability, STAT_MIN)) - bonus))
             if spin_box.value() == value:
                 continue
             was_blocked = spin_box.blockSignals(True)
@@ -135,10 +137,10 @@ class StatEditor(QWidget):
         for row, (ability, label) in enumerate(ABILITY_LABELS.items(), start=1):
             label_widget = QLabel(label)
             spin_box = QSpinBox()
-            spin_box.setRange(8, 15)
+            spin_box.setRange(STAT_MIN, STAT_MAX)
             spin_box.valueChanged.connect(self._base_stat_changed)
             bonus_label = QLabel("+0")
-            final_label = QLabel("8")
+            final_label = QLabel(str(STAT_MIN))
             final_label.setObjectName("sheetMetricValue")
             modifier_label = QLabel("-1")
             save_label = QLabel("-1")
@@ -179,7 +181,7 @@ class StatEditor(QWidget):
             save_bonus = None
             if ability in self._saving_throw_proficiencies:
                 save_bonus = modifier + self._proficiency_bonus
-            spent += POINT_BUY_COSTS.get(base_value, 0)
+            spent += _point_buy_cost(base_value)
             self._bonus_labels[ability].setText(f"+{bonus}" if bonus >= 0 else str(bonus))
             self._final_labels[ability].setText(str(final_value))
             self._modifier_labels[ability].setText(_signed(modifier))
@@ -196,6 +198,13 @@ class StatEditor(QWidget):
 
 def _ability_modifier(score: int) -> int:
     return (int(score) - 10) // 2
+
+
+def _point_buy_cost(value: int) -> int:
+    normalized = max(STAT_MIN, int(value))
+    if normalized in POINT_BUY_COSTS:
+        return POINT_BUY_COSTS[normalized]
+    return POINT_BUY_COSTS[15] + (normalized - 15) * 2
 
 
 def _signed(value: int) -> str:

@@ -120,6 +120,32 @@ def test_environment_end_turn_skips_dead_creature() -> None:
     assert environment.combat_state.active_character.name == "Living"
 
 
+def test_active_actor_killed_by_opportunity_attack_is_skipped(monkeypatch) -> None:
+    import combat.common_actions as common_actions
+
+    weapon = WeaponAttack(name="Sword", damage="1d6", range=1)
+    orc = make_character("Orc", Position(0, 0), Team.ENEMIES, hp=1, speed=3, weapon=weapon)
+    fighter = make_character("Fighter", Position(1, 0), Team.PLAYERS, hp=10, speed=3, weapon=weapon)
+    goblin = make_character("Goblin", Position(4, 0), Team.ENEMIES, hp=10, speed=3, weapon=weapon)
+    orc.weapons = [weapon]
+    fighter.weapons = [weapon]
+    goblin.weapons = [weapon]
+    environment = CombatEnvironment(
+        characters=[orc, fighter, goblin],
+        grid_map=GridMap(width=6, height=6),
+        use_initiative=False,
+        log_to_console=False,
+    )
+    monkeypatch.setattr(common_actions, "_attack_roll", lambda *_args, **_kwargs: 20)
+    monkeypatch.setattr(common_actions, "_roll_weapon_damage", lambda *_args, **_kwargs: 10)
+
+    result = environment.step(MoveAction(actor_id=0, destination=Position(0, 2)))
+
+    assert result.success
+    assert environment.combat_state.characters[0].is_dead
+    assert environment.combat_state.active_actor_id == 1
+
+
 def test_environment_done_and_winner_when_one_team_dead() -> None:
     sword = WeaponAttack(name="Sword", range=1, damage=10, attack_bonus=20)
     hero = make_character("Hero", Position(0, 0), Team.PLAYERS, weapon=sword)

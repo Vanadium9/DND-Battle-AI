@@ -280,6 +280,55 @@ def apply_theme(app: QApplication) -> None:
             padding: 6px 0;
         }
 
+        QFrame#battleResourcesStrip {
+            background: #f7fafc;
+            border: 1px solid #d8e0e8;
+            border-radius: 6px;
+        }
+
+        QLabel#battleResourcesLabel {
+            color: #253549;
+            padding: 2px;
+        }
+
+        QPushButton#compactActionButton {
+            background: #eef3f6;
+            border: 1px solid #b8c6d2;
+            color: #253549;
+            padding: 0;
+            border-radius: 4px;
+            font-size: 11pt;
+            font-weight: 800;
+        }
+
+        QPushButton#compactActionButton:hover {
+            background: #dce7ed;
+            border: 1px solid #2e7d72;
+        }
+
+        QPushButton#compactActionButton:checked {
+            background: #2e7d72;
+            border: 2px solid #1f5a53;
+            color: #ffffff;
+        }
+
+        QPushButton#compactActionButton:disabled {
+            background: #f4f7f9;
+            border: 1px solid #d8e0e8;
+            color: #a7b2bd;
+        }
+
+        QGroupBox#abilityColumn {
+            background: #f8fafc;
+            border: 1px solid #d8e0e8;
+            border-radius: 5px;
+            margin-top: 8px;
+            padding: 7px 4px 4px 4px;
+            color: #33475b;
+            font-size: 8.5pt;
+            font-weight: 700;
+        }
+
         QLabel#warningStatus {
             color: #9f4c4c;
             font-weight: 600;
