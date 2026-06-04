@@ -62,7 +62,7 @@ def test_builder_rejects_unsupported_class_race_subclass_and_item() -> None:
             CharacterBuilderData(name="Bad", race_name="Tiefling")
         )
 
-    with pytest.raises(ValueError, match="Unsupported subclass"):
+    with pytest.raises(ValueError, match="Подкласс недоступен"):
         validate_builder_options(
             CharacterBuilderData(
                 name="Bad",
@@ -72,7 +72,7 @@ def test_builder_rejects_unsupported_class_race_subclass_and_item() -> None:
             )
         )
 
-    with pytest.raises(ValueError, match="Unsupported item"):
+    with pytest.raises(ValueError, match="Предмет не поддерживается"):
         validate_builder_options(
             CharacterBuilderData(
                 name="Bad",
@@ -108,3 +108,33 @@ def test_builder_allows_supported_cleric_spells_and_slots() -> None:
     assert character.spell_save_dc == 13
     assert character.spell_attack_bonus == 5
     assert "Channel Divinity" in character.class_features
+
+
+def test_builder_restricts_class_equipment() -> None:
+    with pytest.raises(ValueError, match="Weapon is not available"):
+        validate_builder_options(
+            CharacterBuilderData(
+                name="Wizard",
+                class_name="Wizard",
+                weapons=("Longsword",),
+            )
+        )
+
+    with pytest.raises(ValueError, match="Armor is not available"):
+        validate_builder_options(
+            CharacterBuilderData(
+                name="Wizard",
+                class_name="Wizard",
+                armor_name="Leather Armor",
+            )
+        )
+
+    with pytest.raises(ValueError, match="Armor is not available"):
+        validate_builder_options(
+            CharacterBuilderData(
+                name="Cleric",
+                class_name="Cleric",
+                subclass_name="Life Domain",
+                armor_name="Chain Mail",
+            )
+        )

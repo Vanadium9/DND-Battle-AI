@@ -22,6 +22,7 @@ from ui.screens import (
     SettingsScreen,
 )
 from ui.services import BattleSetupResult, BattleSetupService, ModelService
+from ui.settings import resolve_project_path
 
 
 SCREEN_DEFINITIONS: dict[str, tuple[str, str]] = {
@@ -67,11 +68,11 @@ class MainWindow(QMainWindow):
 
         self._model_service = model_service or ModelService()
         self._character_repository = character_repository or CharacterRepository(
-            self._model_service.settings.character_dir
+            resolve_project_path(self._model_service.settings.character_dir)
         )
         self._battle_setup_service = BattleSetupService(
             self._character_repository,
-            map_dir=self._model_service.settings.map_dir,
+            map_dir=resolve_project_path(self._model_service.settings.map_dir),
         )
         self._navigation = NavigationPanel(NAVIGATION_ITEMS)
         self._navigation.setFixedWidth(230)
@@ -103,9 +104,13 @@ class MainWindow(QMainWindow):
         self._stack.setCurrentIndex(index)
         current_widget = self._stack.widget(index)
         if key in {"random_battle", "custom_battle"}:
-            self._battle_setup_service.map_dir = Path(self._model_service.settings.map_dir)
+            self._battle_setup_service.map_dir = resolve_project_path(
+                self._model_service.settings.map_dir
+            )
         if key == "replays" and self._replay_list_screen is not None:
-            self._replay_list_screen.replay_dir = Path(self._model_service.settings.replay_dir)
+            self._replay_list_screen.replay_dir = resolve_project_path(
+                self._model_service.settings.replay_dir
+            )
         refresh = getattr(current_widget, "refresh", None)
         if callable(refresh):
             refresh()
@@ -153,7 +158,9 @@ class MainWindow(QMainWindow):
         self._add_screen("custom_battle", CustomBattleScreen(self._battle_setup_service))
         self._battle_screen = BattleScreen(self._model_service)
         self._battle_screen_index = self._stack.addWidget(self._battle_screen)
-        self._replay_list_screen = ReplayListScreen(self._model_service.settings.replay_dir)
+        self._replay_list_screen = ReplayListScreen(
+            resolve_project_path(self._model_service.settings.replay_dir)
+        )
         self._replay_list_screen.open_requested.connect(self._open_replay_viewer)
         self._add_screen("replays", self._replay_list_screen)
         self._replay_viewer_screen = ReplayViewerScreen()
@@ -222,5 +229,5 @@ class MainWindow(QMainWindow):
         )
         fallback_text = self._model_service.fallback_agent_label(settings.fallback_agent)
         self._model_status_label.setText(f"Модель: {model_text}")
-        self._fallback_status_label.setText(f"Fallback: {fallback_text}")
+        self._fallback_status_label.setText(f"Запасной агент: {fallback_text}")
         self._battle_status_label.setText(self._selected_battle_status)

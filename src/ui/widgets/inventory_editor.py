@@ -6,6 +6,7 @@ from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QGridLayout, QLabel, QSpinBox, QVBoxLayout, QWidget
 
 from combat.inventory import get_supported_item_definitions
+from ui.text import ru_label
 
 
 class InventoryEditor(QWidget):
@@ -72,7 +73,7 @@ class InventoryEditor(QWidget):
         grid.setHorizontalSpacing(12)
         grid.setVerticalSpacing(8)
         for row, definition in enumerate(get_supported_item_definitions()):
-            label = QLabel(definition.name)
+            label = QLabel(ru_label(definition.name))
             spin_box = QSpinBox()
             spin_box.setRange(0, 99)
             spin_box.valueChanged.connect(lambda _value: self.inventory_changed.emit())

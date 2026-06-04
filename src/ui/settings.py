@@ -11,6 +11,7 @@ from ui.animations import DEFAULT_ANIMATION_SPEED_MS, normalize_animation_speed
 
 
 DEFAULT_SETTINGS_PATH = Path(__file__).resolve().parents[2] / "data" / "settings.json"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CHARACTER_DIR = "data/characters"
 DEFAULT_REPLAY_DIR = "replays"
 DEFAULT_MAP_DIR = "maps"
@@ -20,9 +21,9 @@ FIXED_FALLBACK_AGENT = "rule_based"
 SUPPORTED_MODEL_TYPES = ("mlp", "gnn")
 SUPPORTED_FALLBACK_AGENTS = ("random_legal", "aggressive_melee", "rule_based")
 FALLBACK_AGENT_LABELS = {
-    "random_legal": "Random legal",
-    "aggressive_melee": "Aggressive melee",
-    "rule_based": "Rule-based",
+    "random_legal": "Случайное разрешённое действие",
+    "aggressive_melee": "Агрессивный ближний бой",
+    "rule_based": "Правиловой агент",
 }
 
 
@@ -102,6 +103,25 @@ def settings_from_mapping(raw: dict[str, Any]) -> GuiSettings:
         map_dir=_non_empty_path(raw.get("map_dir"), DEFAULT_MAP_DIR),
         random_battle_seed=normalize_optional_seed(raw.get("random_battle_seed")),
     )
+
+
+def resolve_project_path(path: str | Path) -> Path:
+    """Resolve relative GUI paths from the project root, not the process cwd."""
+
+    value = Path(path).expanduser()
+    if value.is_absolute():
+        return value
+    return PROJECT_ROOT / value
+
+
+def display_project_path(path: str | Path) -> str:
+    """Return a compact project-relative path when possible."""
+
+    resolved = resolve_project_path(path)
+    try:
+        return str(resolved.relative_to(PROJECT_ROOT)).replace("\\", "/")
+    except ValueError:
+        return str(resolved)
 
 
 def normalize_model_type(model_type: object) -> str:

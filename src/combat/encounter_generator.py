@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 import random
 
 from combat.evaluation_scenarios import (
+    _wizard as wizard_character,
     level_1_fighter_cleric_vs_two_goblins,
     level_1_fighter_vs_goblin,
     level_2_fighter_cleric_vs_goblin_bandit,
@@ -231,6 +232,42 @@ def _curriculum_wizard_fire_elemental_state() -> CombatState:
     )
 
 
+def _curriculum_wizard_intro_state() -> CombatState:
+    return CombatState(
+        characters=[
+            FighterLevel1Basic(Position(0, 1)),
+            wizard_character(1, Position(0, 3), name="Wizard Level 1 Intro"),
+            GoblinMelee(Position(5, 2)),
+        ],
+        grid_map=GridMap(width=6, height=5),
+    )
+
+
+def _curriculum_wizard_aoe_basics_state() -> CombatState:
+    return CombatState(
+        characters=[
+            FighterLevel1Basic(Position(0, 1)),
+            wizard_character(3, Position(0, 3), name="Wizard Evoker Level 3 Basics"),
+            GoblinMelee(Position(5, 1)),
+            GoblinMelee(Position(5, 3)),
+        ],
+        grid_map=GridMap(width=6, height=5),
+    )
+
+
+def _curriculum_mixed_party_intro_state() -> CombatState:
+    return CombatState(
+        characters=[
+            FighterChampionGreatsword(Position(0, 1)),
+            ClericLifeSupport(Position(0, 2)),
+            WizardEvoker(Position(0, 3)),
+            OrcWarrior(Position(7, 1)),
+            GoblinMelee(Position(7, 3)),
+        ],
+        grid_map=GridMap(width=8, height=5),
+    )
+
+
 def _curriculum_obstacle_cover_state() -> CombatState:
     normal = TerrainType.NORMAL
     blocked = TerrainType.BLOCKED
@@ -294,21 +331,21 @@ CURRICULUM_STAGES: tuple[CurriculumStage, ...] = (
     ),
     CurriculumStage(
         level=7,
-        name="Wizard scenarios",
-        description="Evoker spellcasting and AoE targeting against clustered enemies.",
-        factory=level_5_wizard_evoker_vs_three_goblins,
+        name="Wizard intro with Fighter support",
+        description="First wizard stage without archer pressure or enemy numbers advantage.",
+        factory=_curriculum_wizard_intro_state,
     ),
     CurriculumStage(
         level=8,
-        name="Wizard + Fighter vs FireElementalSimple",
-        description="Damage-type awareness against fire immunity with martial backup.",
-        factory=_curriculum_wizard_fire_elemental_state,
+        name="Wizard AoE basics",
+        description="Low-pressure spellcasting and AoE setup against melee goblins.",
+        factory=_curriculum_wizard_aoe_basics_state,
     ),
     CurriculumStage(
         level=9,
-        name="mixed party vs mixed enemies",
-        description="Full level 5 party against varied monster roles.",
-        factory=level_5_full_party_vs_mixed_enemies,
+        name="mixed party intro",
+        description="Full level 5 party against two melee enemies before ranged/kiting pressure.",
+        factory=_curriculum_mixed_party_intro_state,
     ),
     CurriculumStage(
         level=10,
@@ -318,7 +355,7 @@ CURRICULUM_STAGES: tuple[CurriculumStage, ...] = (
     ),
     CurriculumStage(
         level=11,
-        name="enemies with resistances/immunities",
+        name="FireElementalSimple and resistances/immunities",
         description="Resistant and immune enemies that require damage-type awareness.",
         factory=_curriculum_resistance_state,
     ),

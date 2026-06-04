@@ -92,7 +92,7 @@ def test_model_service_check_model_reports_missing_checkpoint() -> None:
     path.write_text(json.dumps(settings.__dict__), encoding="utf-8")
     service = ModelService(settings_path=path)
 
-    with pytest.raises(CheckpointLoadError, match="Checkpoint не найден"):
+    with pytest.raises(CheckpointLoadError, match="Файл модели не найден"):
         service.check_model()
 
 

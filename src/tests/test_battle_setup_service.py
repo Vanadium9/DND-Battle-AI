@@ -30,8 +30,8 @@ def test_preset_random_battle_creates_environment_with_spawned_sides() -> None:
     assert len(enemies) >= 3
     assert result.map_name == "cover_arena"
     assert result.difficulty == "Сложный"
-    assert "Party:" in result.summary
-    assert "Enemies:" in result.summary
+    assert "Отряд:" in result.summary
+    assert "Враги:" in result.summary
     assert state.grid_map is not None
     assert all(state.grid_map.is_walkable(character.position) for character in state.characters)
     assert all(character.position.x <= 1 for character in players)

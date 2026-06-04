@@ -9,6 +9,7 @@ from PySide6.QtCore import QAbstractAnimation, QTimer, QVariantAnimation
 from PySide6.QtWidgets import (
     QCheckBox,
     QFrame,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QMessageBox,
@@ -44,6 +45,7 @@ from ui.services import (
     ModelService,
 )
 from ui.settings import normalize_autobattle_delay
+from ui.text import ru_label, ru_sentence
 from ui.widgets import (
     ActionPanel,
     BattleMapWidget,
@@ -84,6 +86,9 @@ class BattleScreen(QWidget):
         self._initiative_panel = InitiativePanel()
         self._status_panel = CreatureStatusPanel()
         self._action_panel = ActionPanel()
+        self._combat_resources_label = QLabel("")
+        self._combat_resources_label.setWordWrap(True)
+        self._combat_resources_label.setObjectName("battleResourcesLabel")
         self._log_widget = CombatLogWidget()
         self._timer = QTimer(self)
         self._timer.setInterval(self._autobattle_delay_ms())
@@ -146,6 +151,7 @@ class BattleScreen(QWidget):
             self._initiative_panel.set_environment(None)
             self._status_panel.set_environment(None)
             self._action_panel.set_viewer_mode("Бой не запущен.")
+            self._combat_resources_label.setText("")
             self._log_widget.set_entries(())
             self._set_controls_enabled(False)
             return
@@ -166,12 +172,13 @@ class BattleScreen(QWidget):
             self._selected_creature_id,
         )
         self._log_widget.set_entries(self._environment.action_log[-120:])
+        self._combat_resources_label.setText(_active_resources_text(self._environment))
         self._sync_manual_controls()
         self._set_controls_enabled(not self._finished_manually)
 
     def _build_layout(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(0)
 
         frame = ScreenFrame(
@@ -189,10 +196,11 @@ class BattleScreen(QWidget):
         splitter.setChildrenCollapsible(False)
         splitter.addWidget(self._map_widget)
         splitter.addWidget(self._side_panel())
-        splitter.setStretchFactor(0, 4)
+        splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 1)
+        splitter.setSizes([900, 300])
         frame.content_layout.addWidget(splitter, stretch=1)
-        frame.content_layout.addWidget(self._log_widget, stretch=1)
+        frame.content_layout.addWidget(self._bottom_panel(), stretch=0)
         layout.addWidget(frame)
 
     def _control_bar(self) -> QWidget:
@@ -216,13 +224,30 @@ class BattleScreen(QWidget):
 
     def _side_panel(self) -> QWidget:
         panel = QWidget()
+        panel.setMinimumWidth(300)
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(10, 0, 0, 0)
-        layout.setSpacing(10)
+        layout.setContentsMargins(8, 0, 0, 0)
+        layout.setSpacing(8)
         layout.addWidget(self._initiative_panel, stretch=1)
-        layout.addWidget(self._action_panel, stretch=2)
-        layout.addWidget(self._status_panel, stretch=2)
+        layout.addWidget(self._status_panel, stretch=3)
         return panel
+
+    def _bottom_panel(self) -> QWidget:
+        panel = QWidget()
+        layout = QHBoxLayout(panel)
+        layout.setContentsMargins(0, 8, 0, 0)
+        layout.setSpacing(8)
+        layout.addWidget(self._action_panel, stretch=3)
+        layout.addWidget(self._combat_resources_panel(), stretch=1)
+        layout.addWidget(self._log_widget, stretch=2)
+        return panel
+
+    def _combat_resources_panel(self) -> QGroupBox:
+        group = QGroupBox("Р РµСЃСѓСЂСЃС‹ С…РѕРґР°")
+        layout = QVBoxLayout(group)
+        layout.setContentsMargins(10, 14, 10, 10)
+        layout.addWidget(self._combat_resources_label)
+        return group
 
     def _connect_signals(self) -> None:
         self._next_button.clicked.connect(self._next_step)
@@ -409,7 +434,12 @@ class BattleScreen(QWidget):
         actor_id = self._environment.combat_state.active_actor_id
         if actor_id is None or not self._active_actor_is_manual():
             return
-        target_id = self._creature_id_at(position)
+        target_id = None
+        if self._pending_manual_option.target_mode is ManualTargetMode.CREATURE:
+            target_id = self._creature_id_at(
+                position,
+                allowed_target_ids=self._pending_manual_option.target_ids,
+            )
         try:
             action = self._manual_action_builder.build_action(
                 self._environment.combat_state,
@@ -457,13 +487,28 @@ class BattleScreen(QWidget):
             return set(), targets
         return None, None
 
-    def _creature_id_at(self, position: Position) -> int | None:
+    def _creature_id_at(
+        self,
+        position: Position,
+        *,
+        allowed_target_ids: tuple[int, ...] = (),
+    ) -> int | None:
         if self._environment is None:
             return None
-        for creature_id, creature in enumerate(self._environment.combat_state.characters):
-            if creature.position == position:
-                return creature_id
-        return None
+        allowed = set(allowed_target_ids)
+        matching = [
+            creature_id
+            for creature_id, creature in enumerate(self._environment.combat_state.characters)
+            if creature.position == position and (not allowed or creature_id in allowed)
+        ]
+        if not matching:
+            return None
+        alive = [
+            creature_id
+            for creature_id in matching
+            if self._environment.combat_state.characters[creature_id].is_alive
+        ]
+        return alive[-1] if alive else matching[-1]
 
     def _active_actor_is_manual(self) -> bool:
         if self._environment is None or self._setup_result is None:
@@ -556,7 +601,7 @@ class BattleScreen(QWidget):
         if self._environment is None:
             return
         winner = self._environment.get_winner()
-        winner_text = winner.value if winner is not None else "none"
+        winner_text = ru_label(winner.value) if winner is not None else "нет"
         self._environment.action_log.append(f"Победитель: {winner_text}.")
         self._winner_logged = True
 
@@ -567,7 +612,7 @@ class BattleScreen(QWidget):
             return "Бой завершён вручную."
         if self._environment.is_done():
             winner = self._environment.get_winner()
-            winner_text = winner.value if winner is not None else "none"
+            winner_text = ru_label(winner.value) if winner is not None else "нет"
             return f"Бой завершён. Победитель: {winner_text}."
         state = self._environment.combat_state
         actor = state.active_character
@@ -592,6 +637,50 @@ def _actor_is_ai_controlled(
     return False
 
 
+def _active_resources_text(environment: CombatEnvironment) -> str:
+    state = environment.combat_state
+    actor = state.active_character
+    if actor is None:
+        return "Нет активного участника."
+
+    economy = actor.action_economy
+    lines = [
+        actor.name,
+        "",
+        f"Действие: {_yes_no(economy.action_available)}",
+        f"Бонусное действие: {_yes_no(economy.bonus_action_available)}",
+        f"Реакция: {_yes_no(economy.reaction_available)}",
+        f"Перемещение: {economy.movement_remaining}/{actor.speed}",
+    ]
+
+    spell_slots = getattr(actor, "spell_slots", {}) or {}
+    if spell_slots:
+        remaining = getattr(actor, "spell_slots_remaining", {}) or {}
+        lines.append("")
+        lines.append("Ячейки заклинаний:")
+        for level in sorted(spell_slots):
+            lines.append(f"- {level}: {remaining.get(level, 0)}/{spell_slots[level]}")
+
+    resources = getattr(actor, "resources", {}) or {}
+    if resources:
+        lines.append("")
+        lines.append("Ресурсы класса:")
+        for name, resource in resources.items():
+            current = getattr(resource, "uses_remaining", resource)
+            maximum = getattr(resource, "max_uses", current)
+            lines.append(f"- {ru_sentence(name)}: {current}/{maximum}")
+
+    prepared_action = getattr(actor, "prepared_action", None)
+    if prepared_action:
+        lines.append("")
+        lines.append(f"Подготовлено: {ru_sentence(prepared_action)}")
+    return "\n".join(lines)
+
+
+def _yes_no(value: bool) -> str:
+    return "есть" if value else "нет"
+
+
 def _actor_is_manual_controlled(
     environment: CombatEnvironment,
     actor_id: int,
@@ -606,19 +695,19 @@ def _actor_is_manual_controlled(
 
 
 def _describe_action(action: CombatAction) -> str:
-    payload = action.__class__.__name__
+    payload = ru_label(action.__class__.__name__)
     target_id = getattr(action, "target_id", None)
     if target_id is not None:
-        payload += f" -> target {target_id}"
+        payload += f" -> цель {target_id}"
     destination = getattr(action, "destination", None)
     if destination is not None:
-        payload += f" -> ({destination.x}, {destination.y})"
+        payload += f" -> клетка ({destination.x}, {destination.y})"
     spell = getattr(action, "spell", None)
     if spell is not None:
-        payload += f" [{spell.name}]"
+        payload += f" [{ru_sentence(spell.name)}]"
     item = getattr(action, "item", None)
     if item is not None:
-        payload += f" [{item.name}]"
+        payload += f" [{ru_sentence(item.name)}]"
     if isinstance(action, EndTurnAction):
-        payload = "EndTurnAction"
+        payload = ru_label("EndTurnAction")
     return payload

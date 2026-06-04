@@ -5,6 +5,7 @@ from __future__ import annotations
 from PySide6.QtWidgets import QGroupBox, QPlainTextEdit, QVBoxLayout
 
 from combat import CombatEnvironment
+from ui.text import ru_label, ru_sentence
 
 
 class CreatureStatusPanel(QGroupBox):
@@ -68,41 +69,41 @@ def _format_creature_status(creature_id: int, creature: object) -> str:
 
     resources = getattr(creature, "resources", {})
     resource_lines = [
-        f"- {name}: {resource.uses_remaining}/{resource.max_uses}"
+        f"- {ru_sentence(name)}: {resource.uses_remaining}/{resource.max_uses}"
         for name, resource in resources.items()
     ]
     slots = getattr(creature, "spell_slots_remaining", {})
     slot_lines = [
-        f"- level {level}: {slots.get(level, 0)}/{max_count}"
+        f"- уровень {level}: {slots.get(level, 0)}/{max_count}"
         for level, max_count in getattr(creature, "spell_slots", {}).items()
     ]
-    weapons = [weapon.name for weapon in getattr(creature, "weapons", ())]
+    weapons = [ru_sentence(weapon.name) for weapon in getattr(creature, "weapons", ())]
     inventory = [
-        f"{getattr(item, 'name', item)} x{getattr(item, 'quantity', 0)}"
+        f"{ru_sentence(getattr(item, 'name', item))} x{getattr(item, 'quantity', 0)}"
         for item in getattr(creature, "inventory", ())
     ]
     return "\n".join(
         (
             f"ID: {creature_id}",
-            f"Team: {creature.team.value}",
+            f"Сторона: {ru_label(creature.team.name)}",
             f"HP: {creature.hp}/{creature.max_hp}",
-            f"AC: {creature.ac}",
-            f"Position: {creature.position.x}, {creature.position.y}",
-            f"Class: {creature.class_name or '-'}",
-            f"Subclass: {creature.subclass_name or '-'}",
-            f"Race: {creature.race_name or '-'}",
-            f"Role: {getattr(creature, 'role', '-')}",
-            f"Conditions: {', '.join([*conditions, *flags]) or '-'}",
-            "Action economy:",
-            f"- action: {creature.action_economy.action_available}",
-            f"- bonus: {creature.action_economy.bonus_action_available}",
-            f"- reaction: {creature.action_economy.reaction_available}",
-            f"- movement: {creature.action_economy.movement_remaining}",
-            f"Weapons: {', '.join(weapons) or '-'}",
-            "Resources:",
+            f"КД: {creature.ac}",
+            f"Позиция: {creature.position.x}, {creature.position.y}",
+            f"Класс: {ru_label(creature.class_name) if creature.class_name else '-'}",
+            f"Подкласс: {ru_label(creature.subclass_name) if creature.subclass_name else '-'}",
+            f"Раса: {ru_label(creature.race_name) if creature.race_name else '-'}",
+            f"Роль: {ru_label(getattr(creature, 'role', '-'))}",
+            f"Состояния: {', '.join(ru_label(item) for item in [*conditions, *flags]) or '-'}",
+            "Экономика действий:",
+            f"- действие: {creature.action_economy.action_available}",
+            f"- бонусное действие: {creature.action_economy.bonus_action_available}",
+            f"- реакция: {creature.action_economy.reaction_available}",
+            f"- перемещение: {creature.action_economy.movement_remaining}",
+            f"Оружие: {', '.join(weapons) or '-'}",
+            "Ресурсы:",
             *(resource_lines or ["-"]),
-            "Spell slots:",
+            "Ячейки заклинаний:",
             *(slot_lines or ["-"]),
-            f"Inventory: {', '.join(inventory) or '-'}",
+            f"Инвентарь: {', '.join(inventory) or '-'}",
         )
     )

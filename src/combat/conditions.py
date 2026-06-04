@@ -7,7 +7,7 @@ import logging
 import random
 from typing import TYPE_CHECKING
 
-from combat.abilities import ability_modifier
+from combat.checks import saving_throw_modifier
 
 if TYPE_CHECKING:
     from combat.abilities import SpellAbility
@@ -76,7 +76,7 @@ def handle_concentration_damage(
 
     dc = int(max(10, normalized_damage / 2))
     d20_roll = random.randint(1, 20)
-    modifier = ability_modifier(character.stats, "con")
+    modifier = saving_throw_modifier(character, "con")
     total = d20_roll + modifier
     success = total >= dc
     result = ConcentrationSaveResult(

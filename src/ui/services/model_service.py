@@ -19,6 +19,7 @@ from ui.settings import (
     normalize_fallback_agent,
     normalize_model_type,
     normalize_optional_seed,
+    resolve_project_path,
     save_gui_settings,
 )
 
@@ -53,8 +54,9 @@ class ModelService:
     def load_checkpoint(self, path: str, model_type: str) -> None:
         """Load checkpoint and persist the selected settings."""
 
+        checkpoint_path = resolve_project_path(path)
         try:
-            self.battle_ai.load_checkpoint(path, normalize_model_type(model_type))
+            self.battle_ai.load_checkpoint(checkpoint_path, normalize_model_type(model_type))
         except CheckpointLoadError as error:
             self.last_error = str(error)
             raise
@@ -69,9 +71,10 @@ class ModelService:
         checkpoint_path = self.settings.checkpoint_path.strip()
         if not checkpoint_path:
             self.battle_ai.unload_checkpoint()
-            return "Checkpoint не задан. GUI будет использовать fallback agent."
-        if not Path(checkpoint_path).expanduser().exists():
-            message = f"Checkpoint не найден: {checkpoint_path}"
+            return "Файл модели не задан. Интерфейс будет использовать запасного агента."
+        resolved_checkpoint_path = resolve_project_path(checkpoint_path)
+        if not resolved_checkpoint_path.exists():
+            message = f"Файл модели не найден: {checkpoint_path}"
             self.last_error = message
             raise CheckpointLoadError(message)
         self.load_checkpoint(checkpoint_path, self.settings.model_type)
@@ -122,7 +125,7 @@ class ModelService:
         if random_battle_seed is not _UNSET:
             self.settings.random_battle_seed = normalize_optional_seed(random_battle_seed)
         self.battle_ai.configure(
-            checkpoint_path=self.settings.checkpoint_path,
+            checkpoint_path=str(resolve_project_path(self.settings.checkpoint_path)),
             model_type=self.settings.model_type,
             fallback_agent=self.settings.fallback_agent,
         )
@@ -131,7 +134,7 @@ class ModelService:
 
     def apply_settings(self, *, load_checkpoint: bool = True) -> None:
         self.battle_ai.configure(
-            checkpoint_path=self.settings.checkpoint_path,
+            checkpoint_path=str(resolve_project_path(self.settings.checkpoint_path)),
             model_type=self.settings.model_type,
             fallback_agent=self.settings.fallback_agent,
         )

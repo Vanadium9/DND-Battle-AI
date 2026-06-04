@@ -52,11 +52,11 @@ DIFFICULTIES: dict[str, str] = {
 
 ENEMY_GROUPS: dict[str, str] = {
     "auto": "Автоматически по сложности",
-    "goblin_patrol": "Goblin patrol",
-    "orc_raiders": "Orc raiders",
-    "undead_archers": "Undead archers",
-    "mixed_enemies": "Mixed enemies",
-    "fire_elemental": "Fire elemental",
+    "goblin_patrol": "Гоблинский дозор",
+    "orc_raiders": "Орки-налётчики",
+    "undead_archers": "Скелеты-лучники",
+    "mixed_enemies": "Смешанный отряд",
+    "fire_elemental": "Огненный элементаль",
 }
 
 CONTROLLER_MODES: dict[str, str] = {
@@ -68,9 +68,9 @@ CONTROLLER_MODES: dict[str, str] = {
 
 PARTY_PRESETS: dict[str, str] = {
     "none": "Выбрать созданных персонажей",
-    "fighter_level_1": "Fighter level 1",
-    "fighter_archer_level_5": "Fighter Champion Archer level 5",
-    "balanced_level_5": "Fighter + Cleric + Wizard level 5",
+    "fighter_level_1": "Воин 1 уровня",
+    "fighter_archer_level_5": "Воин-чемпион лучник 5 уровня",
+    "balanced_level_5": "Воин + Жрец + Волшебник 5 уровня",
 }
 
 
@@ -124,7 +124,7 @@ class BattleSetupService:
     def maps(self) -> dict[str, str]:
         options = map_options(self.map_dir)
         if options:
-            options["random"] = "random"
+            options["random"] = "Случайная карта"
         return options
 
     def enemy_groups(self) -> dict[str, str]:
@@ -193,7 +193,7 @@ class BattleSetupService:
             rng = random.Random(seed)
             return rng.choice(tuple(key for key in self.maps() if key != "random"))
         if normalized not in self.maps():
-            raise ValueError(f"Unknown map: {map_name}")
+            raise ValueError(f"Неизвестная карта: {map_name}")
         return normalized
 
     def get_map_config(self, map_name: str) -> MapConfig:
@@ -209,15 +209,15 @@ class BattleSetupService:
 
     def _validate_request(self, request: BattleSetupRequest) -> None:
         if request.party_preset not in PARTY_PRESETS:
-            raise ValueError(f"Unknown party preset: {request.party_preset}")
+            raise ValueError(f"Неизвестный шаблон отряда: {request.party_preset}")
         if request.difficulty not in DIFFICULTIES:
-            raise ValueError(f"Unknown difficulty: {request.difficulty}")
+            raise ValueError(f"Неизвестная сложность: {request.difficulty}")
         if request.enemy_group not in ENEMY_GROUPS:
-            raise ValueError(f"Unknown enemy group: {request.enemy_group}")
+            raise ValueError(f"Неизвестная группа врагов: {request.enemy_group}")
         if request.controller_mode not in CONTROLLER_MODES:
-            raise ValueError(f"Unknown controller mode: {request.controller_mode}")
+            raise ValueError(f"Неизвестный режим управления: {request.controller_mode}")
         if normalize_map_key(request.map_name) not in self.maps():
-            raise ValueError(f"Unknown map: {request.map_name}")
+            raise ValueError(f"Неизвестная карта: {request.map_name}")
         if request.party_preset == "none" and not request.saved_character_ids:
             raise ValueError("Выберите хотя бы одного персонажа или готовый party preset.")
 
@@ -234,7 +234,7 @@ class BattleSetupService:
                 continue
             party.append(_internal_character_to_combat(internal))
         if missing:
-            raise ValueError(f"Saved character not found: {', '.join(missing)}")
+            raise ValueError(f"Созданный персонаж не найден: {', '.join(missing)}")
         if not party:
             raise ValueError("Выберите хотя бы одного персонажа или готовый party preset.")
         return party
@@ -460,7 +460,7 @@ def _configured_spawn_positions(
         else map_config.spawn_zones.enemies
     )
     if len(positions) < count:
-        raise ValueError("Map has not enough configured spawn cells.")
+        raise ValueError("На карте недостаточно стартовых клеток.")
     return list(positions[:count])
 
 
@@ -475,12 +475,12 @@ def _format_summary(
 ) -> str:
     return "\n".join(
         (
-            f"Party: {', '.join(party_names) or 'не выбрана'}",
-            f"Enemies: {', '.join(enemy_names) or 'не выбраны'}",
-            f"Map: {map_name}",
-            f"Difficulty: {difficulty}",
-            f"Controller: {controller_mode}",
-            f"Seed: {seed if seed is not None else 'random'}",
+            f"Отряд: {', '.join(party_names) or 'не выбран'}",
+            f"Враги: {', '.join(enemy_names) or 'не выбраны'}",
+            f"Карта: {map_name}",
+            f"Сложность: {difficulty}",
+            f"Управление: {controller_mode}",
+            f"Seed: {seed if seed is not None else 'случайный'}",
         )
     )
 

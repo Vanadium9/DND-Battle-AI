@@ -2,6 +2,7 @@ from combat import (
     AttackAction,
     Character,
     CombatState,
+    DisengageAction,
     EndTurnAction,
     GridMap,
     MoveAction,
@@ -56,6 +57,86 @@ def test_move_action_moves_actor_to_reachable_unoccupied_cell() -> None:
     assert hero.position == Position(0, 2)
     assert hero.action_economy.movement_remaining == 0
     assert not MoveAction(actor_id=0, destination=Position(0, 1)).is_valid(combat_state)
+
+
+def test_move_action_triggers_opportunity_attack_when_leaving_reach(monkeypatch) -> None:
+    sword = WeaponAttack(name="Sword", range=1, damage=4, attack_bonus=20)
+    hero = make_character("Hero", Position(1, 0), Team.PLAYERS)
+    attacker = make_character("Attacker", Position(0, 0), Team.ENEMIES, sword)
+    combat_state = CombatState(
+        characters=[hero, attacker],
+        grid_map=GridMap(width=4, height=4),
+    )
+    monkeypatch.setattr("combat.common_actions.random.randint", lambda _low, _high: 10)
+
+    result = MoveAction(actor_id=0, destination=Position(2, 0)).execute(combat_state)
+
+    assert result.success
+    assert hero.position == Position(2, 0)
+    assert hero.hp == 6
+    assert attacker.action_economy.reaction_available is False
+    assert "Opportunity attacks" in result.description
+    assert "opportunity attacks Hero" in result.description
+
+
+def test_move_action_does_not_trigger_opportunity_attack_after_disengage(monkeypatch) -> None:
+    sword = WeaponAttack(name="Sword", range=1, damage=4, attack_bonus=20)
+    hero = make_character("Hero", Position(1, 0), Team.PLAYERS)
+    attacker = make_character("Attacker", Position(0, 0), Team.ENEMIES, sword)
+    combat_state = CombatState(
+        characters=[hero, attacker],
+        grid_map=GridMap(width=4, height=4),
+    )
+    monkeypatch.setattr("combat.common_actions.random.randint", lambda _low, _high: 10)
+
+    disengage_result = DisengageAction(actor_id=0).execute(combat_state)
+    move_result = MoveAction(actor_id=0, destination=Position(2, 0)).execute(combat_state)
+
+    assert disengage_result.success
+    assert move_result.success
+    assert hero.position == Position(2, 0)
+    assert hero.hp == 10
+    assert attacker.action_economy.reaction_available is True
+    assert "Opportunity attacks" not in move_result.description
+
+
+def test_move_action_does_not_trigger_opportunity_attack_inside_reach(monkeypatch) -> None:
+    sword = WeaponAttack(name="Sword", range=1, damage=4, attack_bonus=20)
+    hero = make_character("Hero", Position(1, 0), Team.PLAYERS)
+    attacker = make_character("Attacker", Position(0, 0), Team.ENEMIES, sword)
+    combat_state = CombatState(
+        characters=[hero, attacker],
+        grid_map=GridMap(width=4, height=4),
+    )
+    monkeypatch.setattr("combat.common_actions.random.randint", lambda _low, _high: 10)
+
+    result = MoveAction(actor_id=0, destination=Position(0, 1)).execute(combat_state)
+
+    assert result.success
+    assert hero.position == Position(0, 1)
+    assert hero.hp == 10
+    assert attacker.action_economy.reaction_available is True
+    assert "Opportunity attacks" not in result.description
+
+
+def test_move_action_does_not_trigger_opportunity_attack_without_reaction(monkeypatch) -> None:
+    sword = WeaponAttack(name="Sword", range=1, damage=4, attack_bonus=20)
+    hero = make_character("Hero", Position(1, 0), Team.PLAYERS)
+    attacker = make_character("Attacker", Position(0, 0), Team.ENEMIES, sword)
+    attacker.action_economy.reaction_available = False
+    combat_state = CombatState(
+        characters=[hero, attacker],
+        grid_map=GridMap(width=4, height=4),
+    )
+    monkeypatch.setattr("combat.common_actions.random.randint", lambda _low, _high: 10)
+
+    result = MoveAction(actor_id=0, destination=Position(2, 0)).execute(combat_state)
+
+    assert result.success
+    assert hero.position == Position(2, 0)
+    assert hero.hp == 10
+    assert attacker.action_economy.reaction_available is False
+    assert "Opportunity attacks" not in result.description
 
 
 def test_attack_action_hits_with_fixed_damage_in_weapon_range() -> None:

@@ -10,6 +10,13 @@ from typing import Any
 
 import torch
 
+from agents.rule_based import (
+    AggressiveMeleeAgent,
+    RangedKitingAgent,
+    RuleBasedAgent,
+    SimpleCasterAgent,
+    SimpleHealerAgent,
+)
 from agents.action_space import (
     ACTION_CATEGORY_COUNT,
     MAIN_ACTION_TYPE_COUNT,
@@ -135,6 +142,59 @@ class RuleBasedEnemyPolicy(RandomPolicy):
         return super().act(observation, masks, deterministic=deterministic)
 
 
+@dataclass
+class AggressiveCombatPolicy:
+    """Role-aware aggressive baseline for training the opposite side."""
+
+    seed: int | None = None
+    target_count: int = 8
+    move_count: int = 64
+    option_count: int = MIN_OPTION_COUNT
+    action_category_count: int = ACTION_CATEGORY_COUNT
+    main_action_type_count: int = MAIN_ACTION_TYPE_COUNT
+    _melee: AggressiveMeleeAgent = field(init=False)
+    _ranged: RangedKitingAgent = field(init=False)
+    _caster: SimpleCasterAgent = field(init=False)
+    _healer: SimpleHealerAgent = field(init=False)
+    _fallback: RuleBasedAgent = field(init=False)
+
+    def __post_init__(self) -> None:
+        self._melee = AggressiveMeleeAgent(seed=self.seed)
+        self._ranged = RangedKitingAgent(seed=self.seed)
+        self._caster = SimpleCasterAgent(seed=self.seed)
+        self._healer = SimpleHealerAgent(seed=self.seed)
+        self._fallback = RuleBasedAgent(seed=self.seed)
+
+    def act(
+        self,
+        observation: Any,
+        masks: Mapping[str, torch.Tensor],
+        deterministic: bool = True,
+        **kwargs: Any,
+    ) -> dict[str, torch.Tensor]:
+        actor = kwargs.get("actor")
+        policy = self._select_policy(actor)
+        return policy.act(
+            observation,
+            masks,
+            deterministic=deterministic,
+            **kwargs,
+        )
+
+    def _select_policy(self, actor: Any | None) -> RuleBasedAgent:
+        if actor is None:
+            return self._fallback
+        role = combat_role_name(actor)
+        if role == CombatRole.SUPPORT.value:
+            return self._healer
+        if role == CombatRole.CASTER.value:
+            return self._caster
+        if role in {CombatRole.RANGED_DAMAGE.value, CombatRole.SKIRMISHER_ENEMY.value}:
+            if _has_ranged_weapon(actor):
+                return self._ranged
+        return self._melee
+
+
 def random_policy(seed: int | None = None) -> RandomPolicy:
     """Create a random baseline policy."""
 
@@ -145,6 +205,12 @@ def rule_based_enemy_policy() -> RuleBasedEnemyPolicy:
     """Create the default rule-based enemy baseline policy."""
 
     return RuleBasedEnemyPolicy()
+
+
+def aggressive_combat_policy(seed: int | None = None) -> AggressiveCombatPolicy:
+    """Create a role-aware aggressive baseline policy."""
+
+    return AggressiveCombatPolicy(seed=seed)
 
 
 @dataclass
@@ -296,12 +362,18 @@ def _first_allowed_index(mask: torch.Tensor | None, size: int) -> int:
     return int(allowed[0].item())
 
 
+def _has_ranged_weapon(actor: Any) -> bool:
+    return any(int(getattr(weapon, "range", 1)) > 1 for weapon in getattr(actor, "weapons", ()))
+
+
 __all__ = [
+    "AggressiveCombatPolicy",
     "CombatRole",
     "MultiAgentPolicyRouter",
     "RandomPolicy",
     "RuleBasedEnemyPolicy",
     "random_policy",
+    "aggressive_combat_policy",
     "role_embedding_for_actor",
     "role_id_for_actor",
     "rule_based_enemy_policy",

@@ -83,12 +83,12 @@ class BattleMapWidget(QWidget):
         if self._manual_click_mode:
             self.cell_clicked.emit(position)
             return
-        for creature_id, creature in enumerate(self._environment.combat_state.characters):
-            if creature.position == position:
-                self._selected_creature_id = creature_id
-                self.creature_selected.emit(creature_id)
-                self.update()
-                return
+        creature_id = self._creature_id_at_position(position)
+        if creature_id is not None:
+            self._selected_creature_id = creature_id
+            self.creature_selected.emit(creature_id)
+            self.update()
+            return
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt override
         painter = QPainter(self)
@@ -138,11 +138,19 @@ class BattleMapWidget(QWidget):
     def _paint_tokens(self, painter: QPainter) -> None:
         state = self._environment.combat_state
         active_actor_id = state.active_actor_id
-        for creature_id, creature in enumerate(state.characters):
+        paint_order = sorted(
+            range(len(state.characters)),
+            key=lambda creature_id: (
+                state.characters[creature_id].is_alive,
+                creature_id,
+            ),
+        )
+        for creature_id in paint_order:
+            creature = state.characters[creature_id]
             cell_rect = self._cell_rect(creature.position)
             token_rect = self._animated_token_rect(
                 creature_id,
-                self._token_rect(creature.position),
+                self._token_rect_for_creature(creature_id),
             )
             color = _token_color(creature_id, creature.team, creature.is_alive)
             painter.setBrush(color)
@@ -320,6 +328,30 @@ class BattleMapWidget(QWidget):
             -cell_rect.height() * 0.22,
         )
 
+    def _token_rect_for_creature(self, creature_id: int) -> QRectF:
+        state = self._environment.combat_state
+        creature = state.character_at(creature_id)
+        if creature is None:
+            return QRectF()
+        token_rect = self._token_rect(creature.position)
+        if creature.is_alive:
+            return token_rect
+        if not any(
+            other_id != creature_id
+            and other.position == creature.position
+            and other.is_alive
+            for other_id, other in enumerate(state.characters)
+        ):
+            return token_rect
+        cell_rect = self._cell_rect(creature.position)
+        size = min(cell_rect.width(), cell_rect.height()) * 0.34
+        return QRectF(
+            cell_rect.right() - size - cell_rect.width() * 0.08,
+            cell_rect.bottom() - size - cell_rect.height() * 0.1,
+            size,
+            size,
+        )
+
     def _animated_token_rect(self, creature_id: int, token_rect: QRectF) -> QRectF:
         progress = self._animation_progress()
         for animation in self._animation_frame.animations:
@@ -341,6 +373,23 @@ class BattleMapWidget(QWidget):
                 dy = (end.y() - start.y()) * lunge
                 return token_rect.translated(dx, dy)
         return token_rect
+
+    def _creature_id_at_position(self, position: Position) -> int | None:
+        if self._environment is None:
+            return None
+        matching = [
+            creature_id
+            for creature_id, creature in enumerate(self._environment.combat_state.characters)
+            if creature.position == position
+        ]
+        if not matching:
+            return None
+        alive = [
+            creature_id
+            for creature_id in matching
+            if self._environment.combat_state.characters[creature_id].is_alive
+        ]
+        return alive[-1] if alive else matching[-1]
 
     def _animation_progress(self) -> float:
         return max(0.0, min(1.0, float(self._animation_frame.progress)))

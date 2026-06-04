@@ -117,3 +117,33 @@ def test_curriculum_map_levels_include_cover_obstacles_and_difficult_terrain() -
     assert TerrainType.LOW_COVER in cover_terrain
     assert TerrainType.HIGH_COVER in cover_terrain
     assert TerrainType.DIFFICULT_TERRAIN in difficult_terrain
+
+
+def test_wizard_curriculum_intro_is_not_outnumbered_by_archers() -> None:
+    generator = EncounterGenerator(seed=4)
+
+    intro_state = generator.generate_curriculum_state(7)
+    aoe_state = generator.generate_curriculum_state(8)
+
+    intro_players = intro_state.characters_for_team(Team.PLAYERS)
+    intro_enemies = intro_state.characters_for_team(Team.ENEMIES)
+    assert {player.class_name for player in intro_players} == {"Fighter", "Wizard"}
+    assert len(intro_enemies) == 1
+    assert all("Archer" not in enemy.name for enemy in intro_enemies)
+
+    aoe_enemies = aoe_state.characters_for_team(Team.ENEMIES)
+    assert len(aoe_enemies) == 2
+    assert all("Archer" not in enemy.name for enemy in aoe_enemies)
+
+
+def test_mixed_party_curriculum_intro_limits_enemy_pressure() -> None:
+    generator = EncounterGenerator(seed=4)
+
+    mixed_intro = generator.generate_curriculum_state(9)
+    players = mixed_intro.characters_for_team(Team.PLAYERS)
+    enemies = mixed_intro.characters_for_team(Team.ENEMIES)
+
+    assert {player.class_name for player in players} == {"Fighter", "Cleric", "Wizard"}
+    assert len(enemies) == 2
+    assert {enemy.name for enemy in enemies} == {"Orc Warrior", "Goblin Melee"}
+    assert all("Archer" not in enemy.name for enemy in enemies)

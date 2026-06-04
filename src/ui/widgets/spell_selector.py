@@ -6,6 +6,7 @@ from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QCheckBox, QLabel, QVBoxLayout, QWidget
 
 from combat.spellcasting import SpellDefinition, get_supported_spell_definitions
+from ui.text import ru_label
 
 
 class SpellSelector(QWidget):
@@ -81,8 +82,8 @@ class SpellSelector(QWidget):
 
 
 def _spell_label(definition: SpellDefinition) -> str:
-    level = "cantrip" if definition.spell_level == 0 else f"level {definition.spell_level}"
-    return f"{definition.name} ({level})"
+    level = "заговор" if definition.spell_level == 0 else f"{definition.spell_level} уровень"
+    return f"{ru_label(definition.name)} ({level})"
 
 
 def _key(value: object) -> str:

@@ -23,6 +23,7 @@ from combat.checks import (
     passive_perception,
     roll_ability_check,
     roll_contested_check,
+    saving_throw_modifier,
 )
 from combat.class_features import (
     archery_attack_bonus,
@@ -149,14 +150,37 @@ class MoveAction(CombatAction):
             return ActionResult(False, f"{actor.name} cannot move to {self.destination}.")
         if actor.prone and not actor.action_economy.stand_up(actor.speed):
             return ActionResult(False, f"{actor.name} cannot stand up from prone.")
+        opportunity_results = _trigger_opportunity_attacks_for_movement(
+            combat_state,
+            self.actor_id,
+            previous_position,
+            self.destination,
+        )
+        if actor.is_dead:
+            opportunity_text = " ".join(result.description for result in opportunity_results)
+            return ActionResult(
+                True,
+                (
+                    f"{actor.name} tries to move from {previous_position} to "
+                    f"{self.destination}, but is defeated before leaving reach. "
+                    f"{opportunity_text}"
+                ).strip(),
+            )
         actor.position = self.destination
         actor.action_economy.spend_movement(path_cost)
+        opportunity_text = (
+            " Opportunity attacks: "
+            + " ".join(result.description for result in opportunity_results)
+            if opportunity_results
+            else ""
+        )
         return ActionResult(
             True,
             (
                 f"{actor.name} moves from {previous_position} to {self.destination}. "
                 f"Movement spent: {movement_cost}, "
                 f"movement remaining: {actor.action_economy.movement_remaining}."
+                f"{opportunity_text}"
             ),
         )
 
@@ -296,7 +320,7 @@ class OpportunityAttackAction(CombatAction):
             or not weapon.available
         ):
             return False
-        return _distance(actor.position, target.position, combat_state) <= 1
+        return _distance(actor.position, target.position, combat_state) <= _melee_weapon_reach(weapon)
 
     def execute(self, combat_state: CombatState) -> ActionResult:
         actor = _get_character(combat_state, self.actor_id)
@@ -359,11 +383,11 @@ class OpportunityAttackAction(CombatAction):
         if actor is None:
             return None
         if self.weapon is not None:
-            if self.weapon in actor.weapons and self.weapon.range <= 1:
+            if self.weapon in actor.weapons and _is_opportunity_attack_weapon(self.weapon):
                 return self.weapon
             return None
         for weapon in actor.available_weapons:
-            if weapon.range <= 1:
+            if _is_opportunity_attack_weapon(weapon):
                 return weapon
         return None
 
@@ -1427,7 +1451,7 @@ def _target_saves_against_spell(
 ) -> bool:
     if spell.save_ability is None:
         return False
-    save_roll = random.randint(1, 20) + ability_modifier(target.stats, spell.save_ability)
+    save_roll = random.randint(1, 20) + saving_throw_modifier(target, spell.save_ability)
     if combat_state is not None and spell.save_ability.casefold() == "dex":
         cover_origin = source_position or actor.position
         save_roll = apply_cover_to_dex_save(
@@ -1636,7 +1660,7 @@ def _target_saves_against_item(
     save_ability = item_save_ability(item)
     if save_ability is None:
         return False
-    save_roll = random.randint(1, 20) + ability_modifier(target.stats, save_ability)
+    save_roll = random.randint(1, 20) + saving_throw_modifier(target, save_ability)
     if save_ability.casefold() == "dex":
         save_roll = apply_cover_to_dex_save(
             save_roll,
@@ -1809,6 +1833,73 @@ def _can_weapon_target_from_map(
         and _cover_between(combat_state, actor.position, target.position)
         is not CoverType.FULL_COVER
     )
+
+
+def _trigger_opportunity_attacks_for_movement(
+    combat_state: CombatState,
+    mover_id: int,
+    origin: Position,
+    destination: Position,
+) -> list[ActionResult]:
+    mover = _get_character(combat_state, mover_id)
+    if mover is None or mover.disengaged_until_end_of_turn or mover.is_dead:
+        return []
+
+    results: list[ActionResult] = []
+    for enemy_id, enemy in enumerate(combat_state.characters):
+        if not _movement_leaves_opportunity_reach(
+            combat_state,
+            enemy,
+            mover,
+            origin,
+            destination,
+        ):
+            continue
+        opportunity_attack = OpportunityAttackAction(actor_id=enemy_id, target_id=mover_id)
+        if not opportunity_attack.is_valid(combat_state):
+            continue
+        result = opportunity_attack.execute(combat_state)
+        if result.success:
+            results.append(result)
+        if mover.is_dead:
+            break
+    return results
+
+
+def _movement_leaves_opportunity_reach(
+    combat_state: CombatState,
+    enemy: Character,
+    mover: Character,
+    origin: Position,
+    destination: Position,
+) -> bool:
+    if enemy is mover or enemy.team == mover.team or not enemy.can_take_turn:
+        return False
+    if not enemy.action_economy.reaction_available:
+        return False
+    weapon = _opportunity_attack_weapon(enemy)
+    if weapon is None:
+        return False
+    reach = _melee_weapon_reach(weapon)
+    return (
+        _distance(enemy.position, origin, combat_state) <= reach
+        and _distance(enemy.position, destination, combat_state) > reach
+    )
+
+
+def _opportunity_attack_weapon(actor: Character) -> WeaponAttack | None:
+    for weapon in actor.available_weapons:
+        if _is_opportunity_attack_weapon(weapon):
+            return weapon
+    return None
+
+
+def _is_opportunity_attack_weapon(weapon: WeaponAttack) -> bool:
+    return weapon.available and weapon.range <= 1
+
+
+def _melee_weapon_reach(weapon: WeaponAttack) -> int:
+    return max(1, int(weapon.range))
 
 
 def _movement_cost(

@@ -1,0 +1,18 @@
+{
+  "name": "Разрушенный зал",
+  "width": 9,
+  "height": 7,
+  "terrain_grid": [
+    ["NORMAL", "NORMAL", "LOW_COVER", "NORMAL", "BLOCKED", "NORMAL", "LOW_COVER", "NORMAL", "NORMAL"],
+    ["NORMAL", "HIGH_COVER", "NORMAL", "NORMAL", "BLOCKED", "NORMAL", "NORMAL", "HIGH_COVER", "NORMAL"],
+    ["NORMAL", "NORMAL", "NORMAL", "LOW_COVER", "NORMAL", "LOW_COVER", "NORMAL", "NORMAL", "NORMAL"],
+    ["NORMAL", "BLOCKED", "NORMAL", "NORMAL", "DIFFICULT_TERRAIN", "NORMAL", "NORMAL", "BLOCKED", "NORMAL"],
+    ["NORMAL", "NORMAL", "NORMAL", "LOW_COVER", "NORMAL", "LOW_COVER", "NORMAL", "NORMAL", "NORMAL"],
+    ["NORMAL", "HIGH_COVER", "NORMAL", "NORMAL", "BLOCKED", "NORMAL", "NORMAL", "HIGH_COVER", "NORMAL"],
+    ["NORMAL", "NORMAL", "LOW_COVER", "NORMAL", "BLOCKED", "NORMAL", "LOW_COVER", "NORMAL", "NORMAL"]
+  ],
+  "spawn_zones": {
+    "players": [[0, 3], [0, 2], [0, 4], [1, 2]],
+    "enemies": [[8, 3], [8, 2], [8, 4], [7, 2]]
+  }
+}

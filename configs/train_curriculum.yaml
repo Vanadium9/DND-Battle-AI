@@ -3,6 +3,7 @@ initial_level: 1
 max_level: 13
 win_rate_threshold: 0.75
 window_size: 20
+min_updates_per_level: 10
 levels:
   - level: 1
     name: 1 Fighter level 1 vs 1 Goblin
@@ -17,15 +18,15 @@ levels:
   - level: 6
     name: Level 4 Fighter + Cleric vs Orc + Skeleton Archer
   - level: 7
-    name: Wizard scenarios
+    name: Wizard intro with Fighter support
   - level: 8
-    name: Wizard vs FireElementalSimple
+    name: Wizard AoE basics
   - level: 9
-    name: mixed party vs mixed enemies
+    name: mixed party intro
   - level: 10
     name: ranged party on map with cover
   - level: 11
-    name: enemies with resistances/immunities
+    name: FireElementalSimple and resistances/immunities
   - level: 12
     name: maps with obstacles and cover
   - level: 13

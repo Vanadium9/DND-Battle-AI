@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFormLayout,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -64,7 +65,7 @@ class RandomBattleScreen(QWidget):
 
     def _build_layout(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(0)
 
         frame = ScreenFrame(
@@ -72,10 +73,18 @@ class RandomBattleScreen(QWidget):
             "Быстрый запуск тестового encounter через существующий combat engine.",
         )
 
-        content = QHBoxLayout()
-        content.addLayout(self._left_column(), stretch=1)
-        content.addLayout(self._right_column(), stretch=1)
-        frame.content_layout.addLayout(content)
+        content = QGridLayout()
+        content.setHorizontalSpacing(12)
+        content.setVerticalSpacing(10)
+        content.addWidget(self._party_group(), 0, 0)
+        content.addWidget(self._parameters_group(), 0, 1)
+        content.addWidget(self._map_group(), 1, 0)
+        content.addWidget(self._summary_group(), 1, 1)
+        content.setColumnStretch(0, 1)
+        content.setColumnStretch(1, 1)
+        content.setRowStretch(0, 0)
+        content.setRowStretch(1, 1)
+        frame.content_layout.addLayout(content, stretch=1)
 
         button_row = QHBoxLayout()
         refresh_button = QPushButton("Обновить описание")
@@ -87,24 +96,26 @@ class RandomBattleScreen(QWidget):
         frame.content_layout.addLayout(button_row)
         layout.addWidget(frame)
 
-    def _left_column(self) -> QVBoxLayout:
-        layout = QVBoxLayout()
-        party_group = QGroupBox("Party")
+    def _party_group(self) -> QGroupBox:
+        party_group = QGroupBox("Отряд")
         party_layout = QVBoxLayout(party_group)
+        party_layout.setSpacing(6)
         self._fill_combo(self._party_preset_combo, self._battle_setup_service.party_presets())
         self._party_preset_combo.currentIndexChanged.connect(self._update_summary)
-        party_layout.addWidget(QLabel("Готовый preset party"))
+        party_layout.addWidget(QLabel("Готовый шаблон отряда"))
         party_layout.addWidget(self._party_preset_combo)
         party_layout.addWidget(QLabel("Или созданные персонажи"))
         self._character_list.itemChanged.connect(self._update_summary)
+        self._character_list.setMaximumHeight(170)
         party_layout.addWidget(self._character_list)
-        layout.addWidget(party_group)
-        return layout
+        return party_group
 
-    def _right_column(self) -> QVBoxLayout:
-        layout = QVBoxLayout()
+    def _parameters_group(self) -> QGroupBox:
         form_group = QGroupBox("Параметры боя")
         form = QFormLayout(form_group)
+        form.setHorizontalSpacing(10)
+        form.setVerticalSpacing(6)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
 
         self._fill_combo(self._difficulty_combo, self._battle_setup_service.difficulties())
         self._populate_map_options()
@@ -136,15 +147,22 @@ class RandomBattleScreen(QWidget):
         form.addRow("Враги", self._enemy_group_combo)
         form.addRow("Управление", self._controller_combo)
         form.addRow("Seed", seed_row)
+        return form_group
 
-        layout.addWidget(form_group)
-        layout.addWidget(QLabel("Preview карты"))
+    def _map_group(self) -> QGroupBox:
+        group = QGroupBox("Предпросмотр карты")
+        layout = QVBoxLayout(group)
+        self._map_preview.setMinimumSize(240, 170)
         layout.addWidget(self._map_preview, stretch=1)
+        return group
+
+    def _summary_group(self) -> QGroupBox:
+        group = QGroupBox("Краткое описание боя")
+        layout = QVBoxLayout(group)
         self._summary_text.setReadOnly(True)
-        self._summary_text.setMinimumHeight(180)
-        layout.addWidget(QLabel("Краткое описание боя"))
+        self._summary_text.setMinimumHeight(120)
         layout.addWidget(self._summary_text)
-        return layout
+        return group
 
     def _populate_characters(self) -> None:
         selected_ids = set(self._selected_character_ids())
@@ -184,7 +202,7 @@ class RandomBattleScreen(QWidget):
             QMessageBox.warning(
                 self,
                 "Модель не загружена",
-                "Checkpoint не загружен. Для AI будет использован fallback agent.",
+                "Файл модели не загружен. Для AI будет использован запасной агент.",
             )
         self.battle_started.emit(result)
 

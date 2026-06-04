@@ -5,8 +5,9 @@ from combat.checks import (
     passive_perception,
     roll_ability_check,
     roll_contested_check,
+    saving_throw_modifier,
 )
-from combat import Character, Position, Stats, Team
+from combat import Character, Position, Stats, Team, build_character
 
 
 def make_character(
@@ -96,3 +97,25 @@ def test_roll_ability_check_rejects_unknown_check() -> None:
 
     with pytest.raises(ValueError, match="Unknown ability or skill"):
         roll_ability_check(character, "alchemy")
+
+
+def test_saving_throw_modifier_uses_only_class_save_proficiencies() -> None:
+    fighter = build_character(
+        name="Fighter",
+        class_name="Fighter",
+        level=1,
+        stats=Stats(str=16, dex=14, con=14),
+    )
+    wizard = build_character(
+        name="Wizard",
+        class_name="Wizard",
+        level=1,
+        stats=Stats(int=16, wis=14, con=14),
+    )
+
+    assert saving_throw_modifier(fighter, "str") == 5
+    assert saving_throw_modifier(fighter, "dex") == 2
+    assert saving_throw_modifier(fighter, "con") == 4
+    assert saving_throw_modifier(wizard, "int") == 5
+    assert saving_throw_modifier(wizard, "wis") == 4
+    assert saving_throw_modifier(wizard, "con") == 2

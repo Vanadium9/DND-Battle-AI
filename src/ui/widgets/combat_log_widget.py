@@ -6,6 +6,8 @@ from collections.abc import Iterable
 
 from PySide6.QtWidgets import QGroupBox, QPlainTextEdit, QVBoxLayout
 
+from ui.text import translate_battle_log
+
 
 class CombatLogWidget(QGroupBox):
     """Read-only combat log with automatic scroll to latest event."""
@@ -14,15 +16,17 @@ class CombatLogWidget(QGroupBox):
         super().__init__("Боевой лог", parent)
         self._text = QPlainTextEdit()
         self._text.setReadOnly(True)
+        self.setMaximumHeight(190)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 14, 10, 10)
         layout.addWidget(self._text)
 
     def set_entries(self, entries: Iterable[str]) -> None:
-        self._text.setPlainText("\n".join(str(entry) for entry in entries))
+        self._text.setPlainText("\n".join(translate_battle_log(entry) for entry in entries))
         self.scroll_to_bottom()
 
     def append_entry(self, entry: str) -> None:
+        entry = translate_battle_log(entry)
         if self._text.toPlainText():
             self._text.appendPlainText(entry)
         else:

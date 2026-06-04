@@ -217,6 +217,7 @@ class CurriculumConfig:
     max_level: int = MAX_CURRICULUM_LEVEL
     win_rate_threshold: float = 0.75
     window_size: int = 20
+    min_updates_per_level: int = 0
 
 
 def load_curriculum_config(path: str | Path) -> CurriculumConfig:
@@ -232,6 +233,7 @@ def load_curriculum_config(path: str | Path) -> CurriculumConfig:
         max_level=int(data.get("max_level", MAX_CURRICULUM_LEVEL)),
         win_rate_threshold=float(data.get("win_rate_threshold", 0.75)),
         window_size=int(data.get("window_size", 20)),
+        min_updates_per_level=max(0, int(data.get("min_updates_per_level", 0))),
     )
 
 
@@ -320,6 +322,8 @@ class PPOTrainer:
             )
         self.curriculum_recent_wins: list[bool] = []
         self.curriculum_transition_log: list[str] = []
+        self.curriculum_updates_on_level = 0
+        self.curriculum_success_team = self._resolve_curriculum_success_team()
         if self.curriculum_config.enabled and self.encounter_generator is not None:
             self.encounter_generator.set_curriculum_level(self.current_curriculum_level)
         self._initialize_parallel_environments()
@@ -352,7 +356,9 @@ class PPOTrainer:
             policy = self._policy_for_actor(state, actor_id)
             actor_observation = self._actor_observation(state, actor_id, policy)
             critic_observation = self._critic_observation(state, actor_id, policy)
-            masks = self._padded_masks(build_action_masks(state, actor_id), policy)
+            raw_masks = self._build_action_masks(state, actor_id)
+            masks = self._padded_masks(raw_masks, policy)
+            training_masks = self._padded_masks(raw_masks, self.model)
 
             with torch.no_grad():
                 action_output = self._policy_act(
@@ -373,7 +379,7 @@ class PPOTrainer:
                 action_output,
                 result.reward,
                 done,
-                masks,
+                training_masks,
                 critic_observation=critic_observation,
                 actor_id=actor_id,
                 team=actor.team if actor is not None else None,
@@ -467,7 +473,7 @@ class PPOTrainer:
                     action_output,
                     result.reward,
                     done,
-                    entry["masks"],
+                    entry["training_masks"],
                     critic_observation=entry["critic_observation"],
                     actor_id=actor_id,
                     team=actor.team,
@@ -521,6 +527,7 @@ class PPOTrainer:
             started = time.perf_counter()
             raw_masks = self._build_action_masks(state, actor_id)
             masks = self._padded_masks(raw_masks, policy)
+            training_masks = self._padded_masks(raw_masks, self.model)
             self._add_profile_time(rollout, "mask", started)
 
             entries.append(
@@ -534,6 +541,7 @@ class PPOTrainer:
                     "critic_observation": critic_observation,
                     "raw_masks": raw_masks,
                     "masks": masks,
+                    "training_masks": training_masks,
                 }
             )
         return entries
@@ -753,6 +761,7 @@ class PPOTrainer:
             metrics[key] /= max(1, updates)
         if self.profile_rollout:
             rollout.profile_times["update"] = time.perf_counter() - update_started
+        self.record_curriculum_update()
         return metrics
 
     def train_iteration(
@@ -812,11 +821,13 @@ class PPOTrainer:
         if not self.curriculum_config.enabled or self.current_curriculum_level is None:
             return
 
-        self.curriculum_recent_wins.append(winner is Team.PLAYERS)
+        self.curriculum_recent_wins.append(winner is self.curriculum_success_team)
         window_size = max(1, self.curriculum_config.window_size)
         if len(self.curriculum_recent_wins) > window_size:
             self.curriculum_recent_wins = self.curriculum_recent_wins[-window_size:]
         if len(self.curriculum_recent_wins) < window_size:
+            return
+        if self.curriculum_updates_on_level < self.curriculum_config.min_updates_per_level:
             return
         if self.current_curriculum_level >= self.curriculum_config.max_level:
             return
@@ -829,6 +840,7 @@ class PPOTrainer:
             previous_level + 1,
         )
         self.curriculum_recent_wins = []
+        self.curriculum_updates_on_level = 0
         if self.encounter_generator is not None:
             self.encounter_generator.set_curriculum_level(self.current_curriculum_level)
         previous_stage = get_curriculum_stage(previous_level)
@@ -840,6 +852,12 @@ class PPOTrainer:
         )
         self.curriculum_transition_log.append(message)
         LOGGER.info(message)
+
+    def record_curriculum_update(self) -> None:
+        """Count one optimizer update spent on the current curriculum level."""
+
+        if self.curriculum_config.enabled and self.current_curriculum_level is not None:
+            self.curriculum_updates_on_level += 1
 
     def curriculum_state_dict(self) -> dict[str, object]:
         """Return serializable curriculum training state."""
@@ -856,6 +874,9 @@ class PPOTrainer:
             "max_level": self.curriculum_config.max_level,
             "win_rate_threshold": self.curriculum_config.win_rate_threshold,
             "window_size": self.curriculum_config.window_size,
+            "min_updates_per_level": self.curriculum_config.min_updates_per_level,
+            "updates_on_level": self.curriculum_updates_on_level,
+            "success_team": self.curriculum_success_team.value,
             "recent_wins": list(self.curriculum_recent_wins),
             "current_win_rate": self.current_curriculum_win_rate,
             "transition_log": list(self.curriculum_transition_log),
@@ -1211,7 +1232,13 @@ class PPOTrainer:
                 if curriculum_window_size is not None
                 else max(1, int(base.window_size))
             ),
+            min_updates_per_level=max(0, int(base.min_updates_per_level)),
         )
+
+    def _resolve_curriculum_success_team(self) -> Team:
+        if self.trainable_teams == {Team.ENEMIES}:
+            return Team.ENEMIES
+        return Team.PLAYERS
 
     def _trainable_indices(self, team_ids: torch.Tensor) -> torch.Tensor:
         if self.trainable_teams is None:

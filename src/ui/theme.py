@@ -24,7 +24,7 @@ def apply_theme(app: QApplication) -> None:
         QStatusBar {
             background: #ffffff;
             border-top: 1px solid #d8e0e8;
-            color: #52616f;
+            color: #2f3f4f;
         }
 
         QLabel#statusChip {
@@ -38,13 +38,13 @@ def apply_theme(app: QApplication) -> None:
 
         QLabel#screenTitle {
             color: #17202a;
-            font-size: 22pt;
+            font-size: 18pt;
             font-weight: 700;
         }
 
         QLabel#screenSubtitle {
-            color: #52616f;
-            font-size: 11pt;
+            color: #33475b;
+            font-size: 10pt;
         }
 
         QWidget#navigationPanel {
@@ -90,10 +90,10 @@ def apply_theme(app: QApplication) -> None:
         }
 
         QGroupBox {
-            border: 1px solid #d8e0e8;
+            border: 1px solid #c6d2dc;
             border-radius: 6px;
-            margin-top: 10px;
-            padding: 12px 10px 10px 10px;
+            margin-top: 8px;
+            padding: 10px 8px 8px 8px;
             font-weight: 700;
             color: #253549;
         }
@@ -109,7 +109,7 @@ def apply_theme(app: QApplication) -> None:
             color: #ffffff;
             border: none;
             border-radius: 6px;
-            padding: 8px 14px;
+            padding: 6px 12px;
             font-weight: 600;
         }
 
@@ -143,9 +143,26 @@ def apply_theme(app: QApplication) -> None:
             background: #ffffff;
             border: 1px solid #cbd5df;
             border-radius: 5px;
-            padding: 5px;
+            padding: 4px;
             selection-background-color: #2e7d72;
             selection-color: #ffffff;
+            min-height: 24px;
+        }
+
+        QSpinBox {
+            padding-right: 18px;
+        }
+
+        QSpinBox::up-button,
+        QSpinBox::down-button {
+            width: 18px;
+            border-left: 1px solid #cbd5df;
+            background: #eef3f6;
+        }
+
+        QSpinBox::up-button:hover,
+        QSpinBox::down-button:hover {
+            background: #dce7ed;
         }
 
         QLineEdit:focus,
@@ -205,7 +222,7 @@ def apply_theme(app: QApplication) -> None:
         }
 
         QLabel#characterCardMetaLabel {
-            color: #52616f;
+            color: #33475b;
             font-weight: 600;
         }
 
@@ -213,14 +230,53 @@ def apply_theme(app: QApplication) -> None:
             color: #1f2933;
         }
 
+        QLabel#characterSheetSummary {
+            background: #f7faf9;
+            border: 1px solid #cbded9;
+            border-radius: 8px;
+            padding: 10px;
+            color: #1f2933;
+            font-size: 10pt;
+            font-weight: 600;
+            line-height: 150%;
+        }
+
+        QLabel#sheetMetricValue {
+            color: #17202a;
+            font-size: 10.5pt;
+            font-weight: 700;
+            padding: 1px 4px;
+        }
+
+        QLabel#pointBuyStatus {
+            background: #eef6f4;
+            border: 1px solid #cbded9;
+            border-radius: 5px;
+            color: #17202a;
+            font-weight: 700;
+            padding: 5px 7px;
+        }
+
+        QLabel#pointBuyStatus[overBudget="true"] {
+            background: #fff1f1;
+            border: 1px solid #d89b9b;
+            color: #8a2f2f;
+        }
+
+        QLabel#compactHeader {
+            color: #33475b;
+            font-size: 9pt;
+            font-weight: 700;
+        }
+
         QLabel#emptyStateLabel {
-            color: #6b7785;
+            color: #3f5367;
             padding: 36px;
             font-size: 12pt;
         }
 
         QLabel#inlineStatus {
-            color: #52616f;
+            color: #33475b;
             padding: 6px 0;
         }
 

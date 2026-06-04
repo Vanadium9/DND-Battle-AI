@@ -18,8 +18,8 @@ class ScreenFrame(QWidget):
         super().__init__(parent)
         self.setObjectName("screenSurface")
         self.content_layout = QVBoxLayout(self)
-        self.content_layout.setContentsMargins(28, 26, 28, 26)
-        self.content_layout.setSpacing(14)
+        self.content_layout.setContentsMargins(18, 16, 18, 16)
+        self.content_layout.setSpacing(10)
 
         title_label = QLabel(title)
         title_label.setObjectName("screenTitle")

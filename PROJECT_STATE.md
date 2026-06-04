@@ -3002,3 +3002,434 @@ ROADMAP должен обновиться:
   - Magic Missile декодируется с upcast slot level 3
   - fire spell против FireElementalSimple remap-ится на Ray of Frost или Magic Missile при наличии альтернативы
 - прогнать полный pytest
+
+## 84. Запрос: Глобально допилить GUI
+
+Проблемы:
+- GUI ругался на отсутствие checkpoint, хотя `checkpoints/gnn_ppo_actor_critic.pt` существовал
+- причина:
+  - часть путей GUI резолвилась относительно текущей рабочей папки процесса, а не корня проекта
+- случайный бой мог показывать отсутствие карт, хотя JSON-карты есть в `maps/`
+- в интерфейсе оставалось много англоязычных боевых/персонажных подписей
+- конструктор персонажа выглядел как техническая форма, а не как интерактивный лист персонажа
+- в GUI не было функциональности создания карт
+
+Требования:
+- централизованно резолвить GUI-пути относительно корня проекта:
+  - checkpoint
+  - data/characters
+  - replays
+  - maps
+- оставить модель фиксированной:
+  - PPO Actor-Critic + GNN encoder
+  - без пользовательского выбора model_type/checkpoint в настройках
+- добавить простой конструктор карт:
+  - название
+  - ширина/высота
+  - шаблон генерации
+  - seed
+  - предпросмотр
+  - сохранение JSON в `maps/`
+- добавить готовые карты:
+  - `forest_ambush.json`
+  - `ruined_hall.json`
+  - `muddy_crossing.json`
+- русифицировать видимые GUI-строки:
+  - настройки
+  - случайный бой
+  - группы ручных действий
+  - панель существа
+  - заклинания
+  - инвентарь
+  - основные ошибки конструктора
+- переработать character builder:
+  - русские display labels при сохранении внутренних английских ruleset keys
+  - боковая карточка листа персонажа
+  - русские вкладки и поля
+  - русские названия рас, классов, подклассов, оружия, брони, ролей, боевых стилей
+- обновить тесты под русские UI-сообщения
+- прогнать полный pytest
+
+## 85. Запрос: Переделать создание персонажа ближе к цифровому листу LongStoryShort
+
+Проблема:
+- предыдущая переработка конструктора всё ещё выглядела как мастер по вкладкам
+- пользователь ожидал формат интерактивного листа персонажа:
+  - шапка персонажа
+  - характеристики
+  - боевой блок
+  - класс/развитие
+  - заклинания
+  - экипировка
+  - инвентарь
+  - проверка валидности на одном визуальном полотне
+
+Требования:
+- заменить вкладочную структуру `CharacterBuilderScreen` на единый прокручиваемый цифровой лист
+- сохранить существующую логику сборки и валидации `InternalCharacter`
+- оставить публичные поля виджетов, которые используются тестами и экраном списка персонажей
+- добавить живую карточку боевых параметров:
+  - HP
+  - КД
+  - скорость
+  - бонус мастерства
+  - СЛ заклинаний
+  - бонус атаки заклинанием
+  - ячейки заклинаний
+  - классовые ресурсы
+- обновить стиль GUI под новый лист персонажа
+- прогнать тесты конструктора и GUI smoke tests
+
+## 86. Запрос: Починить читаемость, масштабирование GUI и point buy в конструкторе
+
+Проблемы:
+- часть подписей в GUI была слишком бледной на белом фоне
+- полноэкранный режим не решал проблему масштаба:
+  - крупные отступы
+  - растянутые формы
+  - некомпактные параметры случайного боя
+- конструктор персонажа позволял редактировать характеристики как обычные значения `1..30`
+- расовые бонусы применялись отдельной кнопкой, что не похоже на цифровой лист персонажа
+
+Требования:
+- сделать вторичный текст контрастнее
+- уменьшить глобальные отступы и размеры крупных заголовков
+- сделать экран случайного боя компактнее:
+  - отряд и параметры боя сверху
+  - предпросмотр карты и описание боя снизу
+  - не растягивать список персонажей и описание чрезмерно
+- заменить редактор характеристик на D&D 5e point buy:
+  - стартовые базовые значения 8
+  - бюджет 27 очков
+  - стоимость значений 8-15 по стандартной таблице point buy
+  - показывать оставшиеся очки
+  - показывать базу, расовый бонус и итог
+- расовые бонусы применять автоматически при выборе расы
+- убрать кнопку ручного применения расовых бонусов
+- запретить сохранение персонажа при перерасходе point-buy бюджета
+- прогнать GUI/validation тесты и полный pytest
+
+## 87. Запрос: Дочинить интерфейс боя, отображение атрибутов и русский лог
+
+Проблемы:
+- в конструкторе персонажа не отображались модификаторы характеристик
+- спасброски выглядели так, будто бонус мастерства применяется универсально
+- бонус мастерства должен прибавляться только к спасброскам, которыми владеет класс
+- боковая панель выбора действий в бою была слишком узкой и неудобной даже в полноэкранном режиме
+- некоторые числовые поля имели слишком маленькую кликабельную зону стрелок
+- если живое существо заходило на клетку с трупом:
+  - визуально токены перекрывались
+  - клик по клетке мог выбирать труп
+  - ручная атака могла становиться невозможной из-за выбора мёртвой цели
+- боевой лог всё ещё содержал англоязычные технические строки
+
+Требования:
+- расширить `StatEditor`:
+  - показывать базовое значение
+  - расовый бонус
+  - итог
+  - модификатор характеристики
+  - спасбросок
+- передавать в `StatEditor` контекст класса:
+  - proficiency_bonus
+  - saving_throw_proficiencies
+- показывать bonus proficiency только для классовых спасбросков
+- расширить action panel:
+  - нормальная минимальная ширина
+  - двухколоночные кнопки действий
+  - более удобная боковая панель боя
+- поправить `QSpinBox` styling:
+  - минимальная высота
+  - явная ширина стрелок
+- исправить выбор цели в клетке с трупом:
+  - живые существа имеют приоритет при hit-testing
+  - трупы рисуются ниже живых
+  - труп в занятой живым существом клетке рисуется меньшим маркером
+- переводить боевой лог на русский на уровне GUI
+- добавить regression test на выбор живой цели поверх трупа
+
+## 88. Запрос: Разделить режимы обучения игроков, врагов и self-play основу
+
+Проблема:
+- текущий training CLI фактически использовал одну trainable policy для обеих сторон
+- из-за этого модель могла учиться одновременно за игроков и за врагов, получая смешанные сигналы
+- для GUI/демо нужны агрессивные враги, а не случайные или недообученные действия
+- нужен режим:
+  - обучать игроков против агрессивных врагов
+  - обучать врагов против агрессивных игроков или checkpoint player policy
+  - позже использовать policy-vs-policy/self-play
+
+Требования:
+- добавить в `scripts/train_ppo.py` параметр:
+  - `--train-side players|enemies|both`
+- добавить opponent policy:
+  - `--opponent-policy aggressive|rule_based|random|checkpoint`
+  - `--opponent-checkpoint`
+  - `--opponent-model-type`
+- режим `players`:
+  - trainable: `Team.PLAYERS`
+  - enemies: aggressive/rule/checkpoint opponent
+- режим `enemies`:
+  - trainable: `Team.ENEMIES`
+  - players: aggressive/rule/checkpoint opponent
+- режим `both`:
+  - одна общая trainable policy управляет обеими сторонами
+- добавить role-aware aggressive baseline:
+  - melee/brute -> AggressiveMeleeAgent
+  - ranged/skirmisher -> RangedKitingAgent
+  - caster -> SimpleCasterAgent
+  - support -> SimpleHealerAgent
+- добавить frozen checkpoint opponent:
+  - checkpoint загружается как policy
+  - параметры замораживаются
+  - optimizer его не обновляет
+- добавить в training log:
+  - `train_side`
+  - `opponent_policy`
+  - `trained_side_win_rate`
+- добавить тесты режимов training policy routing и frozen opponent checkpoint
+
+## 89. Багфикс: rollout masks разных размеров при opponent policy
+
+Проблема:
+- команда:
+  - `scripts/train_ppo.py --train-side players --opponent-policy aggressive --model-type gnn ...`
+- падала на `trainer.update(rollout)`
+- ошибка:
+  - `RuntimeError: stack expects each tensor to be equal size, but got [16] at entry 0 and [8] at entry 81`
+- причина:
+  - в rollout попадали ходы trainable GNN policy и opponent baseline
+  - для выбора действия opponent использовал свои `target_count/option_count`
+  - в `RolloutBuffer` сохранялись policy-specific masks
+  - до фильтрации `trainable_teams` `rollout.to_tensors(...)` пытался stack-нуть masks разных размеров
+
+Исправление:
+- в `PPOTrainer` разделить:
+  - `masks`: policy-specific masks для `policy.act(...)`
+  - `training_masks`: masks, padded под action space trainable model
+- в rollout сохранять только `training_masks`
+- policy-specific masks продолжать использовать для выбора действия opponent
+- исправить оба пути:
+  - `collect_episode`
+  - `collect_rollout`
+- добавить regression test:
+  - GNN model `target_count=16`
+  - aggressive opponent baseline с меньшим action space
+  - `trainable_teams={Team.PLAYERS}`
+  - `trainer.update(rollout)` не падает
+
+## 90. Багфикс: не печатать старые curriculum transitions после resume
+
+Проблема:
+- после запуска `train_ppo.py` с resume из checkpoint скрипт печатал старые `curriculum_transition`
+- визуально это выглядело так, будто curriculum заново мгновенно прошёл уровни 8-13
+- причина:
+  - `curriculum_transition_log` восстанавливался из checkpoint
+  - `reported_curriculum_transitions` всегда стартовал с `0`
+
+Исправление:
+- добавить `initial_reported_curriculum_transitions(...)`
+- если checkpoint загружен (`checkpoint_status.startswith("loaded:")`), считать уже восстановленные transitions уже напечатанными
+- для fresh run оставить поведение прежним
+- добавить тест на resume/fresh поведение
+
+## 91. Доработка curriculum learning после раздельного обучения сторон
+
+Промт:
+- исправить обучение после перехода на `--train-side players/enemies/both`
+- не дублировать `win_rate` и `trained_side_win_rate` в логах
+- сделать curriculum переходы понятнее в логах
+- добавить минимальное число PPO update на одной стадии, чтобы curriculum не перескакивал уровни слишком быстро
+- облегчить начальные wizard-сценарии, потому что уровень с волшебником резко давал 0 win rate
+- сохранить возможность продолжать обучение из checkpoint
+
+Изменения:
+- `PPOTrainer` теперь считает успех curriculum по обучаемой стороне:
+  - `players` -> победа `Team.PLAYERS`
+  - `enemies` -> победа `Team.ENEMIES`
+  - `both` -> совместимость: победа игроков как основной campaign-side metric
+- добавлен `CurriculumConfig.min_updates_per_level`
+- состояние curriculum checkpoint теперь хранит:
+  - `updates_on_level`
+  - `success_team`
+  - `min_updates_per_level`
+- `scripts/train_ppo.py` получил CLI параметр:
+  - `--curriculum-min-updates-per-level`
+- training log теперь пишет:
+  - `trained_win_rate`
+  - `opponent_win_rate`
+  - для `both`: `player_win_rate` и `enemy_win_rate`
+  - `curriculum_level`
+  - `curriculum_stage`
+  - `curriculum_window`
+  - `curriculum_window_win_rate`
+  - `curriculum_threshold`
+  - `curriculum_updates_on_level`
+- `configs/train_curriculum.yaml`:
+  - `min_updates_per_level: 10`
+- curriculum stage 7 заменён на мягкий wizard intro:
+  - Fighter level 1 + Wizard level 1 vs 1 Goblin Melee
+- curriculum stage 8 заменён на базовый wizard AoE:
+  - Fighter level 1 + Wizard level 3 vs 2 Goblin Melee
+- FireElementalSimple оставлен позже, в стадии resistances/immunities
+
+Проверка:
+- `python -m pytest src/tests/test_ppo_trainer.py src/tests/test_train_ppo_script.py src/tests/test_encounter_generator.py`
+- `python -m pytest`
+- результат полного прогона: `347 passed`
+
+## 92. Доработка curriculum stage 9 после таймаутов
+
+Промт:
+- stage 9 `mixed party vs mixed enemies` часто уходил в timeout
+- в логах были серии:
+  - `completed=0`
+  - `timeouts=5..11`
+  - `trained_win_rate=0`
+  - `opponent_win_rate=0`
+- причина:
+  - после wizard stage 8 curriculum резко переходил к full party level 5 vs 4 mixed enemies
+  - состав врагов включал OrcWarrior, GoblinArcher, Bandit, Wolf
+  - одновременно появлялись:
+    - full party координация
+    - лечение Cleric
+    - ranged/kiting pressure
+    - быстрый melee Wolf
+    - больше существ в initiative order
+  - `max_episode_steps=128` часто не хватало для завершения боя
+
+Изменения:
+- stage 9 заменён на промежуточный `mixed party intro`
+- новый состав:
+  - FighterChampionGreatsword level 5
+  - ClericLifeSupport level 5
+  - WizardEvoker level 5
+  - OrcWarrior
+  - GoblinMelee
+- убраны из stage 9:
+  - GoblinArcher
+  - Bandit
+  - Wolf
+- цель stage 9:
+  - обучить координацию полного отряда без ranged/kiting давления
+- текущий сложный mixed fight остаётся в evaluation scenarios, но больше не является первым full-party curriculum шагом
+- обновлён `configs/train_curriculum.yaml`
+- добавлен regression test:
+  - stage 9 содержит Fighter/Cleric/Wizard
+  - врагов ровно 2
+  - враги: Orc Warrior и Goblin Melee
+  - нет Archer
+
+Проверка:
+- `python -m pytest src/tests/test_encounter_generator.py src/tests/test_ppo_trainer.py src/tests/test_train_ppo_script.py`
+- `python -m pytest`
+- результат полного прогона: `348 passed`
+
+## 93. Реализация автоматических opportunity attacks при движении
+
+Промт:
+- реализовать полноценную провоцированную атаку
+- если существо выходит из зоны досягаемости melee-оружия врага, этот враг должен автоматически совершить melee attack реакцией
+- это важно для обучения, потому что без этого модель училась неправильной позиционной тактике
+
+Проблема:
+- `OpportunityAttackAction` уже существовал, но был только отдельным действием
+- `MoveAction` не вызывал его автоматически
+- проверялись только тесты:
+  - реакция тратится
+  - Disengage запрещает opportunity attack
+  - нельзя сделать две реакции
+- но реальное перемещение из reach не провоцировало атаку
+
+Изменения:
+- `MoveAction.execute(...)` теперь:
+  - запоминает исходную позицию
+  - до фактического перемещения определяет врагов, из reach которых actor выходит
+  - вызывает `OpportunityAttackAction` до смены позиции
+  - добавляет результат opportunity attacks в описание движения
+  - если mover погиб от opportunity attack, он не перемещается
+- добавлены helpers:
+  - `_trigger_opportunity_attacks_for_movement(...)`
+  - `_movement_leaves_opportunity_reach(...)`
+  - `_opportunity_attack_weapon(...)`
+  - `_is_opportunity_attack_weapon(...)`
+  - `_melee_weapon_reach(...)`
+- `OpportunityAttackAction.is_valid(...)` теперь использует reach выбранного melee-оружия через `_melee_weapon_reach(...)`, а не жёсткое `<= 1`
+- Disengage продолжает полностью блокировать opportunity attacks
+- reaction тратится у атакующего врага
+
+Ограничение текущей модели:
+- у `WeaponAttack` пока нет явного `weapon_type=melee/ranged`
+- поэтому opportunity attack использует оружие, которое текущая система считает melee:
+  - `weapon.range <= 1`
+- helper `_melee_weapon_reach(...)` вынесен отдельно, чтобы позже поддержать reach weapons, если в данных оружия появится явный melee/reach тип
+
+Тесты:
+- движение из соседней клетки за пределы reach провоцирует opportunity attack
+- Disengage предотвращает automatic opportunity attack
+- движение внутри reach не провоцирует attack
+- враг без reaction не атакует
+
+Проверка:
+- `python -m pytest src/tests/test_actions.py src/tests/test_common_actions_behavior.py src/tests/test_common_actions_dnd5e.py src/tests/test_environment.py`
+- `python -m pytest`
+- результат полного прогона: `352 passed`
+
+## 94. Срочные GUI-правки для пояснительной записки и демонстрации
+
+Промт:
+- временно отвлечься от обучения и привести GUI в вид, пригодный для демонстрации в пояснительной записке
+- убрать правую верхнюю карточку листа персонажа в конструкторе
+- в характеристиках показывать бонус спасброска только у тех характеристик, которыми владеет класс:
+  - Fighter: STR, CON
+  - Cleric: WIS, CHA
+  - Wizard: INT, WIS
+- если боевой симулятор прибавляет proficiency ко всем спасброскам, исправить
+- не трогать proficiency в расчётах атак
+- добавить упрощённые ограничения экипировки:
+  - Wizard: без доспехов, оружие только Dagger, Quarterstaff, Light Crossbow
+  - Cleric: без Chain Mail, оружие только Mace, Quarterstaff, Dagger, Light Crossbow
+  - Fighter: всё доступное оружие и доспехи
+- в BattleScreen перенести выбор ручных действий вниз, на место боевого лога
+- в нижней панели боя показывать ресурсы активного участника:
+  - action
+  - bonus action
+  - reaction
+  - movement
+  - spell slots
+  - class resources
+- переразметить экран боя под новую нижнюю панель
+
+Изменения:
+- `StatEditor`:
+  - больше не показывает числовой спасбросок у всех характеристик
+  - для не-владений показывает `-`
+  - для владений показывает modifier + proficiency bonus
+- `combat.checks`:
+  - добавлен `saving_throw_modifier(character, ability)`
+  - proficiency добавляется только если класс владеет соответствующим спасброском
+- `combat.common_actions`:
+  - saving throws от spell/item эффектов используют `saving_throw_modifier`
+- `combat.conditions`:
+  - concentration CON save использует `saving_throw_modifier`
+- атаки оружием не изменялись
+- `CharacterBuilderScreen`:
+  - правый верхний summary-лист больше не строится в layout
+  - основная секция персонажа занимает всю верхнюю строку
+  - добавлены class equipment limits
+  - списки брони/оружия фильтруются по выбранному классу
+  - validation запрещает сохранить недоступное оружие/броню
+- `BattleScreen`:
+  - action panel перенесён в нижнюю панель
+  - справа остались initiative panel и creature status
+  - нижняя панель содержит:
+    - доступные ручные действия
+    - ресурсы активного существа
+    - боевой лог
+- `ActionPanel`:
+  - уменьшена минимальная ширина для нижней раскладки
+
+Проверка:
+- `python -m pytest src/tests/test_character_builder_validation.py src/tests/test_gui_smoke.py src/tests/test_checks.py src/tests/test_concentration.py src/tests/test_aoe.py`
+- `python -m pytest`
+- результат полного прогона: `354 passed`

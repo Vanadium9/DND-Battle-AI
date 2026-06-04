@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
+    QGridLayout,
     QGroupBox,
     QLabel,
     QPushButton,
@@ -17,6 +18,7 @@ from ui.services.manual_action_builder import (
     ManualActionPlan,
     ManualTargetMode,
 )
+from ui.text import ru_label, ru_sentence
 
 
 class ActionPanel(QWidget):
@@ -26,12 +28,14 @@ class ActionPanel(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setMinimumWidth(300)
         self._title = QLabel("Ручное управление")
         self._title.setObjectName("panelTitle")
         self._hint = QLabel("AI управляет текущим существом.")
         self._hint.setWordWrap(True)
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
+        self._scroll.setMinimumWidth(280)
         self._content = QWidget()
         self._content_layout = QVBoxLayout(self._content)
         self._content_layout.setContentsMargins(0, 0, 0, 0)
@@ -71,16 +75,17 @@ class ActionPanel(QWidget):
             options = plan.groups.get(group_name, ())
             if not options:
                 continue
-            group = QGroupBox(group_name)
-            group_layout = QVBoxLayout(group)
+            group = QGroupBox(ru_label(group_name))
+            group_layout = QGridLayout(group)
             group_layout.setContentsMargins(8, 8, 8, 8)
             group_layout.setSpacing(6)
-            for option in options:
+            for index, option in enumerate(options):
                 button = QPushButton(_option_label(option))
                 button.setCheckable(True)
+                button.setMinimumHeight(34)
                 button.setChecked(pending_option is not None and option.id == pending_option.id)
                 button.clicked.connect(lambda _checked=False, item=option: self.option_selected.emit(item))
-                group_layout.addWidget(button)
+                group_layout.addWidget(button, index // 2, index % 2)
             self._content_layout.addWidget(group)
         self._content_layout.addStretch(1)
 
@@ -98,4 +103,4 @@ def _option_label(option: ManualActionOption) -> str:
         suffix = " -> цель"
     elif option.target_mode is ManualTargetMode.CELL:
         suffix = " -> клетка"
-    return f"{option.label}{suffix}"
+    return f"{ru_sentence(option.label)}{suffix}"

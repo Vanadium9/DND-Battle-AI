@@ -64,6 +64,7 @@ from combat.checks import (
     roll_contested_check,
     roll_d20,
     roll_initiative_check,
+    saving_throw_modifier,
 )
 from combat.character_builder import (
     CharacterBuildRequest,
@@ -497,6 +498,7 @@ __all__ = [
     "roll_contested_check",
     "roll_d20",
     "roll_initiative_check",
+    "saving_throw_modifier",
     "roll_initiative_order",
     "scenario_names",
     "reset_turn_resources",

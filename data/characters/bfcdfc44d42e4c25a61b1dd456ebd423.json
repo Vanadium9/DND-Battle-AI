@@ -1,0 +1,110 @@
+{
+  "id": "bfcdfc44d42e4c25a61b1dd456ebd423",
+  "name": "Гендальф",
+  "class_name": "Wizard",
+  "subclass_name": null,
+  "level": 1,
+  "experience": 0,
+  "race_name": "Elf",
+  "role": "MELEE_DAMAGE",
+  "stats": {
+    "str": 9,
+    "dex": 14,
+    "con": 13,
+    "int": 15,
+    "wis": 12,
+    "cha": 12
+  },
+  "hp": 7,
+  "ac": 12,
+  "speed": 30,
+  "proficiency_bonus": 2,
+  "weapons": [
+    {
+      "name": "Quarterstaff",
+      "range": 1,
+      "damage": "1d6",
+      "damage_type": "bludgeoning"
+    }
+  ],
+  "armor": {
+    "name": "None",
+    "base_ac": 10,
+    "dex_cap": null
+  },
+  "class_features": [
+    "Spellcasting",
+    "Arcane Recovery"
+  ],
+  "subclass_features": [],
+  "race_traits": {
+    "ability_score_bonuses": {
+      "dex": 2
+    },
+    "size": "Medium",
+    "speed": 3,
+    "darkvision_range": 6,
+    "skill_proficiencies": [
+      "perception"
+    ],
+    "weapon_proficiencies": [
+      "longsword",
+      "shortsword",
+      "shortbow",
+      "longbow"
+    ],
+    "saving_throw_advantages": [],
+    "damage_resistances": [],
+    "special_traits": [
+      "Fey Ancestry",
+      "Trance"
+    ]
+  },
+  "feats": [],
+  "spells": [
+    {
+      "name": "Fire Bolt",
+      "level": 0,
+      "action_cost": "action"
+    },
+    {
+      "name": "Ray of Frost",
+      "level": 0,
+      "action_cost": "action"
+    },
+    {
+      "name": "Magic Missile",
+      "level": 1,
+      "action_cost": "action"
+    },
+    {
+      "name": "Shield",
+      "level": 1,
+      "action_cost": "reaction"
+    },
+    {
+      "name": "Burning Hands",
+      "level": 1,
+      "action_cost": "action"
+    }
+  ],
+  "prepared_spells": [
+    "Fire Bolt",
+    "Ray of Frost",
+    "Magic Missile",
+    "Shield",
+    "Burning Hands"
+  ],
+  "spell_slots": {
+    "1": 2
+  },
+  "spell_save_dc": 12,
+  "spell_attack_bonus": 4,
+  "resources": {
+    "arcane_recovery": 1
+  },
+  "inventory": [],
+  "resistances": [],
+  "immunities": [],
+  "vulnerabilities": []
+}

@@ -1,0 +1,17 @@
+{
+  "name": "Лесная засада",
+  "width": 8,
+  "height": 6,
+  "terrain_grid": [
+    ["NORMAL", "LOW_COVER", "NORMAL", "DIFFICULT_TERRAIN", "NORMAL", "LOW_COVER", "NORMAL", "NORMAL"],
+    ["NORMAL", "DIFFICULT_TERRAIN", "LOW_COVER", "NORMAL", "HIGH_COVER", "NORMAL", "DIFFICULT_TERRAIN", "NORMAL"],
+    ["NORMAL", "NORMAL", "BLOCKED", "NORMAL", "NORMAL", "BLOCKED", "NORMAL", "NORMAL"],
+    ["NORMAL", "LOW_COVER", "NORMAL", "DIFFICULT_TERRAIN", "NORMAL", "LOW_COVER", "NORMAL", "NORMAL"],
+    ["NORMAL", "DIFFICULT_TERRAIN", "NORMAL", "NORMAL", "HIGH_COVER", "NORMAL", "DIFFICULT_TERRAIN", "NORMAL"],
+    ["NORMAL", "NORMAL", "LOW_COVER", "DIFFICULT_TERRAIN", "NORMAL", "NORMAL", "LOW_COVER", "NORMAL"]
+  ],
+  "spawn_zones": {
+    "players": [[0, 2], [0, 1], [0, 3], [0, 4]],
+    "enemies": [[7, 2], [7, 1], [7, 3], [7, 4]]
+  }
+}

@@ -140,6 +140,24 @@ def ability_modifier(score: int) -> int:
     return (int(score) - 10) // 2
 
 
+def saving_throw_modifier(character: Character, ability: str) -> int:
+    """Return ability save modifier with class proficiency when applicable."""
+
+    ability_name = str(ability).strip().casefold()
+    if ability_name not in ABILITY_NAMES:
+        raise ValueError(f"Unknown ability score: {ability}")
+    modifier = ability_modifier(getattr(character.stats, ability_name))
+    from rules.classes import get_class_definition
+
+    class_definition = get_class_definition(getattr(character, "class_name", None))
+    if (
+        class_definition is not None
+        and ability_name in class_definition.saving_throw_proficiencies
+    ):
+        modifier += int(getattr(character, "proficiency_bonus", 0))
+    return modifier
+
+
 def roll_d20(rng: random.Random | None = None) -> int:
     """Roll one d20."""
 

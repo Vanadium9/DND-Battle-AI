@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import random
 from typing import Any, Iterable
 
 from combat.map import GridMap
@@ -69,6 +70,92 @@ def load_map_config(path: str | Path) -> MapConfig:
     except OSError as error:
         raise MapConfigValidationError(f"Cannot read map JSON: {config_path}") from error
     return map_config_from_mapping(raw, source_path=config_path)
+
+
+def save_map_config(config: MapConfig, path: str | Path) -> Path:
+    """Save a validated map config to JSON."""
+
+    target_path = Path(path)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_text(
+        json.dumps(map_config_to_mapping(config), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return target_path
+
+
+def map_config_to_mapping(config: MapConfig) -> dict[str, object]:
+    """Return a JSON-ready map mapping."""
+
+    return {
+        "name": config.name,
+        "width": config.width,
+        "height": config.height,
+        "terrain_grid": [
+            [cell.name for cell in row]
+            for row in config.terrain_grid
+        ],
+        "spawn_zones": {
+            "players": [[position.x, position.y] for position in config.spawn_zones.players],
+            "enemies": [[position.x, position.y] for position in config.spawn_zones.enemies],
+        },
+    }
+
+
+def generate_random_map_config(
+    *,
+    name: str,
+    width: int = 8,
+    height: int = 6,
+    seed: int | None = None,
+    template: str = "balanced",
+) -> MapConfig:
+    """Generate a simple valid tactical map for GUI use."""
+
+    rng = random.Random(seed)
+    safe_width = max(4, min(16, int(width)))
+    safe_height = max(4, min(12, int(height)))
+    terrain_grid = [
+        [TerrainType.NORMAL for _x in range(safe_width)]
+        for _y in range(safe_height)
+    ]
+    blocked_probability, difficult_probability, low_cover_probability, high_cover_probability = (
+        _template_probabilities(template)
+    )
+    for y in range(safe_height):
+        for x in range(safe_width):
+            if x in {0, safe_width - 1}:
+                continue
+            roll = rng.random()
+            if roll < blocked_probability:
+                terrain_grid[y][x] = TerrainType.BLOCKED
+            elif roll < blocked_probability + difficult_probability:
+                terrain_grid[y][x] = TerrainType.DIFFICULT_TERRAIN
+            elif roll < blocked_probability + difficult_probability + low_cover_probability:
+                terrain_grid[y][x] = TerrainType.LOW_COVER
+            elif roll < blocked_probability + difficult_probability + low_cover_probability + high_cover_probability:
+                terrain_grid[y][x] = TerrainType.HIGH_COVER
+
+    player_spawns = _spawn_column_positions(0, safe_height)
+    enemy_spawns = _spawn_column_positions(safe_width - 1, safe_height)
+    for position in (*player_spawns, *enemy_spawns):
+        terrain_grid[position.y][position.x] = TerrainType.NORMAL
+
+    return map_config_from_mapping(
+        {
+            "name": name,
+            "width": safe_width,
+            "height": safe_height,
+            "terrain_grid": [
+                [cell.name for cell in row]
+                for row in terrain_grid
+            ],
+            "spawn_zones": {
+                "players": [[position.x, position.y] for position in player_spawns],
+                "enemies": [[position.x, position.y] for position in enemy_spawns],
+            },
+        }
+    )
 
 
 def map_config_from_mapping(
@@ -144,6 +231,31 @@ def normalize_map_key(value: object) -> str:
     """Normalize map names to stable file-style keys."""
 
     return str(value).strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _template_probabilities(template: str) -> tuple[float, float, float, float]:
+    key = normalize_map_key(template)
+    if key == "open":
+        return (0.02, 0.04, 0.04, 0.02)
+    if key == "cover":
+        return (0.04, 0.04, 0.16, 0.06)
+    if key == "terrain":
+        return (0.03, 0.22, 0.06, 0.03)
+    if key == "obstacles":
+        return (0.12, 0.06, 0.08, 0.08)
+    return (0.06, 0.10, 0.10, 0.04)
+
+
+def _spawn_column_positions(x: int, height: int) -> tuple[Position, ...]:
+    middle = height // 2
+    candidates = [middle, middle - 1, middle + 1, middle - 2, middle + 2]
+    positions = []
+    seen = set()
+    for y in candidates:
+        if 0 <= y < height and y not in seen:
+            positions.append(Position(x, y))
+            seen.add(y)
+    return tuple(positions[:4])
 
 
 def _parse_terrain_grid(

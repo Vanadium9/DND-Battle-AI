@@ -11,7 +11,7 @@ from agents import (
 )
 from combat import CombatEnvironment, EncounterGenerator, FighterArcher, Goblin, GridMap, Position, Team
 from configs import PPOConfig
-from training import CurriculumConfig, PPOTrainer, RolloutBuffer, load_curriculum_config
+from training import CurriculumConfig, PPOTrainer, RolloutBuffer, aggressive_combat_policy, load_curriculum_config
 
 
 CHECKPOINT_DIR = Path("checkpoints") / "test_ppo_trainer"
@@ -178,6 +178,53 @@ def test_collect_rollout_supports_multiple_environments() -> None:
     assert len(rollout) == 6
     assert rollout.last_values_by_env
     assert len(set(rollout.env_ids)) > 1
+    assert all(torch.isfinite(torch.tensor(value)) for value in metrics.values())
+
+
+def test_rollout_with_opponent_policy_stores_model_sized_masks() -> None:
+    environment = CombatEnvironment(
+        characters=[
+            FighterArcher(Position(0, 0)),
+            Goblin(Position(1, 0)),
+        ],
+        grid_map=GridMap(width=8, height=8),
+        use_initiative=False,
+        log_to_console=False,
+    )
+    model = GNNPPOActorCritic(
+        target_count=16,
+        move_count=64,
+        option_count=16,
+        bonus_action_type_count=4,
+        reaction_type_count=4,
+        class_feature_count=4,
+        spell_count=4,
+        slot_level_count=4,
+        item_count=4,
+        gnn_hidden_size=16,
+        policy_hidden_size=32,
+        context_hidden_sizes=(),
+        message_passing_steps=1,
+    )
+    trainer = PPOTrainer(
+        environment=environment,
+        model=model,
+        config=PPOConfig(
+            rollout_steps=6,
+            update_epochs=1,
+            minibatch_size=2,
+            checkpoint_dir=str(CHECKPOINT_DIR),
+            model_type="gnn",
+        ),
+        enemy_policy=aggressive_combat_policy(seed=0),
+        trainable_teams={Team.PLAYERS},
+    )
+
+    rollout = trainer.collect_rollout(max_episode_steps=4)
+    metrics = trainer.update(rollout)
+
+    assert rollout.masks["target_index"]
+    assert all(mask.shape == (model.target_count,) for mask in rollout.masks["target_index"])
     assert all(torch.isfinite(torch.tensor(value)) for value in metrics.values())
 
 
@@ -361,6 +408,59 @@ def test_curriculum_level_advances_at_win_rate_threshold() -> None:
     assert "Curriculum advanced from level 1" in trainer.curriculum_transition_log[-1]
 
 
+def test_curriculum_min_updates_blocks_early_advance() -> None:
+    generator = EncounterGenerator(seed=23, curriculum_level=1)
+    environment = generator.generate_curriculum_environment(log_to_console=False)
+    trainer = PPOTrainer(
+        environment=environment,
+        model=PPOActorCritic(target_count=6, move_count=64, hidden_sizes=(32,)),
+        config=PPOConfig(rollout_steps=2, checkpoint_dir=str(CHECKPOINT_DIR)),
+        encounter_generator=generator,
+        curriculum_config=CurriculumConfig(
+            enabled=True,
+            initial_level=1,
+            max_level=3,
+            win_rate_threshold=1.0,
+            window_size=1,
+            min_updates_per_level=2,
+        ),
+    )
+
+    trainer.record_curriculum_result(Team.PLAYERS)
+    assert trainer.curriculum_level == 1
+
+    trainer.record_curriculum_update()
+    trainer.record_curriculum_update()
+    trainer.record_curriculum_result(Team.PLAYERS)
+
+    assert trainer.curriculum_level == 2
+
+
+def test_curriculum_success_team_follows_enemy_training_side() -> None:
+    generator = EncounterGenerator(seed=24, curriculum_level=1)
+    environment = generator.generate_curriculum_environment(log_to_console=False)
+    trainer = PPOTrainer(
+        environment=environment,
+        model=PPOActorCritic(target_count=6, move_count=64, hidden_sizes=(32,)),
+        config=PPOConfig(rollout_steps=2, checkpoint_dir=str(CHECKPOINT_DIR)),
+        encounter_generator=generator,
+        trainable_teams={Team.ENEMIES},
+        curriculum_config=CurriculumConfig(
+            enabled=True,
+            initial_level=1,
+            max_level=3,
+            win_rate_threshold=1.0,
+            window_size=1,
+        ),
+    )
+
+    trainer.record_curriculum_result(Team.PLAYERS)
+    assert trainer.curriculum_level == 1
+
+    trainer.record_curriculum_result(Team.ENEMIES)
+    assert trainer.curriculum_level == 2
+
+
 def test_curriculum_state_is_saved_in_checkpoint() -> None:
     generator = EncounterGenerator(seed=22, curriculum_level=1)
     environment = generator.generate_curriculum_environment(log_to_console=False)
@@ -385,6 +485,8 @@ def test_curriculum_state_is_saved_in_checkpoint() -> None:
     assert checkpoint["curriculum_level"] == 2
     assert checkpoint["curriculum_state"]["enabled"] is True
     assert checkpoint["curriculum_state"]["current_level"] == 2
+    assert checkpoint["curriculum_state"]["updates_on_level"] == 0
+    assert checkpoint["curriculum_state"]["success_team"] == Team.PLAYERS.value
     assert checkpoint["curriculum_state"]["transition_log"]
 
 
@@ -397,3 +499,4 @@ def test_train_curriculum_config_loads_from_yaml() -> None:
     assert config.initial_level == 1
     assert config.max_level == 13
     assert config.win_rate_threshold == 0.75
+    assert config.min_updates_per_level == 10

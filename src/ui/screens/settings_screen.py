@@ -18,7 +18,12 @@ from PySide6.QtWidgets import (
 from inference import CheckpointLoadError, PolicyCompatibilityError
 from ui.animations import MAX_ANIMATION_SPEED_MS, MIN_ANIMATION_SPEED_MS
 from ui.services import ModelService
-from ui.settings import DEFAULT_CHECKPOINT_PATH, FIXED_FALLBACK_AGENT, FIXED_MODEL_TYPE
+from ui.settings import (
+    DEFAULT_CHECKPOINT_PATH,
+    FIXED_FALLBACK_AGENT,
+    FIXED_MODEL_TYPE,
+    display_project_path,
+)
 from ui.widgets.screen import ScreenFrame
 
 
@@ -52,12 +57,19 @@ class SettingsScreen(QWidget):
         self._set_spin_value(self._animation_speed_spin, settings.animation_speed)
         self._set_spin_value(self._autobattle_delay_spin, settings.autobattle_delay)
         self._model_label.setText("PPO Actor-Critic + GNN encoder")
-        self._checkpoint_label.setText(settings.checkpoint_path or DEFAULT_CHECKPOINT_PATH)
+        self._checkpoint_label.setText(
+            display_project_path(settings.checkpoint_path or DEFAULT_CHECKPOINT_PATH)
+        )
         self._fallback_label.setText(
             self._model_service.fallback_agent_label(settings.fallback_agent)
         )
         self._data_dirs_label.setText(
-            f"characters: {settings.character_dir}; replays: {settings.replay_dir}; maps: {settings.map_dir}"
+            "персонажи: "
+            f"{display_project_path(settings.character_dir)}; "
+            "реплеи: "
+            f"{display_project_path(settings.replay_dir)}; "
+            "карты: "
+            f"{display_project_path(settings.map_dir)}"
         )
         self._update_status()
 
@@ -78,8 +90,8 @@ class SettingsScreen(QWidget):
         self._data_dirs_label.setWordWrap(True)
 
         form.addRow("Модель", self._model_label)
-        form.addRow("Checkpoint", self._checkpoint_label)
-        form.addRow("Fallback", self._fallback_label)
+        form.addRow("Файл модели", self._checkpoint_label)
+        form.addRow("Запасной агент", self._fallback_label)
         form.addRow("Папки данных", self._data_dirs_label)
 
         self._animations_checkbox.stateChanged.connect(lambda _state: self._save_settings())
@@ -119,7 +131,7 @@ class SettingsScreen(QWidget):
         self.settings_changed.emit()
 
     def _check_model(self) -> None:
-        self._status_label.setText("Загрузка checkpoint...")
+        self._status_label.setText("Загрузка файла модели...")
         self._set_check_busy(True)
         QApplication.processEvents()
         try:
@@ -148,7 +160,7 @@ class SettingsScreen(QWidget):
             self._status_label.setText(f"{prefix}Активная политика: {policy_name}")
             return
         self._status_label.setText(
-            f"{prefix}Checkpoint не загружен. Активная политика: {policy_name}"
+            f"{prefix}Файл модели не загружен. Активная политика: {policy_name}"
         )
 
     def _show_error(self, message: str) -> None:
@@ -178,16 +190,19 @@ def _friendly_model_error(error: CheckpointLoadError) -> str:
     text = str(error)
     lowered = text.lower()
     if "checkpoint not found" in lowered or "checkpoint не найден" in lowered:
-        return text.replace("Checkpoint not found", "Checkpoint не найден")
+        return text.replace("Checkpoint not found", "Файл модели не найден").replace(
+            "Checkpoint не найден",
+            "Файл модели не найден",
+        )
     if "does not contain gnn" in lowered or "model_type" in lowered or "gnn" in lowered:
         return (
-            "Checkpoint не соответствует фиксированной архитектуре "
+            "Файл модели не соответствует фиксированной архитектуре "
             f"PPO Actor-Critic + GNN encoder: {text}"
         )
     if "incompatible" in lowered or "size mismatch" in lowered or "cannot infer" in lowered:
         return f"Неподдерживаемый action space или архитектура checkpoint: {text}"
     if "unsupported checkpoint format" in lowered or "no tensor" in lowered:
-        return f"Checkpoint повреждён или имеет неподдерживаемый формат: {text}"
+        return f"Файл модели повреждён или имеет неподдерживаемый формат: {text}"
     if "failed to load" in lowered:
-        return f"Checkpoint повреждён или не читается: {text}"
+        return f"Файл модели повреждён или не читается: {text}"
     return text

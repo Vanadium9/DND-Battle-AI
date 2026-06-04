@@ -1,10 +1,12 @@
 """Training placeholders."""
 
 from training.multi_agent import (
+    AggressiveCombatPolicy,
     CombatRole,
     MultiAgentPolicyRouter,
     RandomPolicy,
     RuleBasedEnemyPolicy,
+    aggressive_combat_policy,
     random_policy,
     role_embedding_for_actor,
     role_id_for_actor,
@@ -28,6 +30,7 @@ from training.self_play import (
 from training.trainer import Trainer
 
 __all__ = [
+    "AggressiveCombatPolicy",
     "CombatRole",
     "CurriculumConfig",
     "EpisodeStats",
@@ -42,6 +45,7 @@ __all__ = [
     "SelfPlayConfig",
     "SelfPlayManager",
     "Trainer",
+    "aggressive_combat_policy",
     "load_curriculum_config",
     "load_self_play_config",
     "random_policy",
