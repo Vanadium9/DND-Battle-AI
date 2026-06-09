@@ -20,8 +20,8 @@ NAVIGATION_ITEMS: tuple[NavigationItem, ...] = (
     NavigationItem("home", "⌂ Главная"),
     NavigationItem("characters", "👥 Персонажи"),
     NavigationItem("character_create", "+ Создать персонажа"),
-    NavigationItem("random_battle", "⚔ Случайный бой"),
-    NavigationItem("custom_battle", "⚔ Кастомный бой"),
+    NavigationItem("random_battle", "⚔ Начать бой"),
+    NavigationItem("custom_battle", "Генерация карты"),
     NavigationItem("settings", "⚙ Настройки"),
 )
 

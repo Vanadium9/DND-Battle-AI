@@ -31,11 +31,11 @@ SCREEN_DEFINITIONS: dict[str, tuple[str, str]] = {
         "Пошаговая сборка персонажа по поддержанному ruleset.",
     ),
     "random_battle": (
-        "Случайный бой",
+        "Начать бой",
         "Быстрый запуск encounter через существующий EncounterGenerator.",
     ),
     "custom_battle": (
-        "Кастомный бой",
+        "Генерация карты",
         "Настройка состава сторон, карты и стартовых условий боя.",
     ),
     "settings": (
@@ -55,8 +55,8 @@ class MainWindow(QMainWindow):
     ) -> None:
         super().__init__()
         self.setWindowTitle("D&D Battle AI")
-        self.resize(1180, 760)
-        self.setMinimumSize(900, 560)
+        self.resize(1180, 900)
+        self.setMinimumSize(900, 650)
 
         self._model_service = model_service or ModelService()
         self._character_repository = character_repository or CharacterRepository(

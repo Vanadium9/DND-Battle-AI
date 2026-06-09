@@ -1,0 +1,81 @@
+{
+  "id": "90a2f1750b97427f8787df2a93e8be7e",
+  "name": "Евпатий Коловрат",
+  "class_name": "Fighter",
+  "subclass_name": "Champion",
+  "level": 5,
+  "experience": 0,
+  "race_name": "Human",
+  "role": "MELEE_DAMAGE",
+  "stats": {
+    "str": 16,
+    "dex": 14,
+    "con": 14,
+    "int": 11,
+    "wis": 11,
+    "cha": 13
+  },
+  "hp": 44,
+  "ac": 16,
+  "speed": 30,
+  "proficiency_bonus": 3,
+  "weapons": [
+    {
+      "name": "Greatsword",
+      "range": 1,
+      "damage": "2d6",
+      "damage_type": "slashing"
+    }
+  ],
+  "armor": {
+    "name": "Chain Mail",
+    "base_ac": 16,
+    "dex_cap": 0
+  },
+  "class_features": [
+    "Fighting Style",
+    "Second Wind",
+    "Action Surge",
+    "Martial Archetype: Champion",
+    "Ability Score Improvement",
+    "Extra Attack"
+  ],
+  "subclass_features": [
+    "Improved Critical"
+  ],
+  "race_traits": {
+    "ability_score_bonuses": {
+      "str": 1,
+      "dex": 1,
+      "con": 1,
+      "int": 1,
+      "wis": 1,
+      "cha": 1
+    },
+    "size": "Medium",
+    "speed": 3,
+    "darkvision_range": null,
+    "skill_proficiencies": [],
+    "weapon_proficiencies": [],
+    "saving_throw_advantages": [],
+    "damage_resistances": [],
+    "special_traits": [],
+    "fighting_style": "Great Weapon Fighting"
+  },
+  "feats": [
+    "Ability Score Improvement"
+  ],
+  "spells": [],
+  "prepared_spells": [],
+  "spell_slots": {},
+  "spell_save_dc": 0,
+  "spell_attack_bonus": 0,
+  "resources": {
+    "second_wind": 1,
+    "action_surge": 1
+  },
+  "inventory": [],
+  "resistances": [],
+  "immunities": [],
+  "vulnerabilities": []
+}

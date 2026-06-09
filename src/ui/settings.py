@@ -14,7 +14,10 @@ DEFAULT_SETTINGS_PATH = Path(__file__).resolve().parents[2] / "data" / "settings
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CHARACTER_DIR = "data/characters"
 DEFAULT_MAP_DIR = "maps"
-DEFAULT_CHECKPOINT_PATH = "checkpoints/gnn_ppo_actor_critic.pt"
+DEFAULT_CHECKPOINT_PATH = "checkpoints/gnn_class_curriculum_v3.pt"
+LEGACY_CHECKPOINT_PATHS = {
+    "checkpoints/gnn_ppo_actor_critic.pt",
+}
 FIXED_MODEL_TYPE = "gnn"
 FIXED_FALLBACK_AGENT = "rule_based"
 SUPPORTED_MODEL_TYPES = ("mlp", "gnn")
@@ -86,7 +89,7 @@ def settings_from_mapping(raw: dict[str, Any]) -> GuiSettings:
     """Build normalized settings from a loosely typed mapping."""
 
     return GuiSettings(
-        checkpoint_path=_non_empty_path(raw.get("checkpoint_path"), DEFAULT_CHECKPOINT_PATH),
+        checkpoint_path=_normalize_checkpoint_path(raw.get("checkpoint_path")),
         model_type=FIXED_MODEL_TYPE,
         fallback_agent=FIXED_FALLBACK_AGENT,
         animation_speed=normalize_animation_speed(
@@ -165,6 +168,14 @@ def normalize_optional_seed(value: object) -> int | None:
 def _non_empty_path(value: object, default: str) -> str:
     text = str(value).strip() if value is not None else ""
     return text or default
+
+
+def _normalize_checkpoint_path(value: object) -> str:
+    checkpoint_path = _non_empty_path(value, DEFAULT_CHECKPOINT_PATH)
+    normalized = checkpoint_path.replace("\\", "/")
+    if normalized in LEGACY_CHECKPOINT_PATHS:
+        return DEFAULT_CHECKPOINT_PATH
+    return checkpoint_path
 
 
 def _as_bool(value: object) -> bool:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass, field
 import logging
 from pathlib import Path
@@ -77,6 +78,8 @@ class RolloutBuffer:
     next_values: list[torch.Tensor] = field(default_factory=list)
     actor_ids: list[int] = field(default_factory=list)
     team_ids: list[int] = field(default_factory=list)
+    class_ids: list[int] = field(default_factory=list)
+    trainable_flags: list[bool] = field(default_factory=list)
     env_ids: list[int] = field(default_factory=list)
     episode_winners: list[Team | None] = field(default_factory=list)
     episode_timeouts: int = 0
@@ -94,6 +97,8 @@ class RolloutBuffer:
         critic_observation: Any | None = None,
         actor_id: int | None = None,
         team: Team | None = None,
+        actor_class: str | None = None,
+        trainable_transition: bool = True,
         env_id: int = 0,
         next_value: torch.Tensor | float | None = None,
     ) -> None:
@@ -112,21 +117,25 @@ class RolloutBuffer:
             self.next_values.append(torch.as_tensor(next_value).detach().cpu().reshape(()))
         self.actor_ids.append(-1 if actor_id is None else int(actor_id))
         self.team_ids.append(_team_id(team))
+        self.class_ids.append(_class_id(actor_class))
+        self.trainable_flags.append(bool(trainable_transition))
         self.env_ids.append(int(env_id))
 
+        sanitized_action = _sanitize_action_for_masks(action, masks)
         for key, value in action.items():
             if key in {"log_prob", "entropy", "value"}:
                 continue
             if key not in self.actions:
                 self.actions[key] = []
-            self.actions[key].append(value.detach().cpu().long().reshape(()))
+            selected_value = sanitized_action.get(key, value)
+            self.actions[key].append(selected_value.detach().cpu().long().reshape(()))
         for key in self.actions:
             if len(self.actions[key]) < len(self.rewards):
                 self.actions[key].append(torch.tensor(0, dtype=torch.long))
         for key, value in masks.items():
             if key not in self.masks:
                 self.masks[key] = []
-            self.masks[key].append(value.detach().cpu().bool())
+            self.masks[key].append(value.detach().cpu().bool().clone())
         for key in self.masks:
             if len(self.masks[key]) < len(self.rewards):
                 self.masks[key].append(torch.ones(1, dtype=torch.bool))
@@ -151,6 +160,16 @@ class RolloutBuffer:
             self.env_ids
             if len(self.env_ids) == len(self.rewards)
             else [0] * len(self.rewards)
+        )
+        class_ids = (
+            self.class_ids
+            if len(self.class_ids) == len(self.rewards)
+            else [0] * len(self.rewards)
+        )
+        trainable_flags = (
+            self.trainable_flags
+            if len(self.trainable_flags) == len(self.rewards)
+            else [True] * len(self.rewards)
         )
 
         return {
@@ -183,6 +202,16 @@ class RolloutBuffer:
             "team_ids": torch.tensor(
                 team_ids,
                 dtype=torch.long,
+                device=device,
+            ),
+            "class_ids": torch.tensor(
+                class_ids,
+                dtype=torch.long,
+                device=device,
+            ),
+            "trainable_flags": torch.tensor(
+                trainable_flags,
+                dtype=torch.bool,
                 device=device,
             ),
             "env_ids": torch.tensor(
@@ -218,6 +247,10 @@ class CurriculumConfig:
     win_rate_threshold: float = 0.75
     window_size: int = 20
     min_updates_per_level: int = 0
+    kind: str = "general"
+    rehearsal_probability: float = 0.0
+    terminal_defeat_penalty: float = 0.0
+    timeout_penalty: float = 0.0
 
 
 def load_curriculum_config(path: str | Path) -> CurriculumConfig:
@@ -234,6 +267,16 @@ def load_curriculum_config(path: str | Path) -> CurriculumConfig:
         win_rate_threshold=float(data.get("win_rate_threshold", 0.75)),
         window_size=int(data.get("window_size", 20)),
         min_updates_per_level=max(0, int(data.get("min_updates_per_level", 0))),
+        kind=str(data.get("kind", "general")).strip().lower(),
+        rehearsal_probability=max(
+            0.0,
+            min(1.0, float(data.get("rehearsal_probability", 0.0))),
+        ),
+        terminal_defeat_penalty=max(
+            0.0,
+            float(data.get("terminal_defeat_penalty", 0.0)),
+        ),
+        timeout_penalty=max(0.0, float(data.get("timeout_penalty", 0.0))),
     )
 
 
@@ -257,6 +300,8 @@ class PPOTrainer:
         player_policy: Any | None = None,
         enemy_policy: Any | None = None,
         role_policies: Mapping[object, Any] | None = None,
+        ally_policy: Any | None = None,
+        freeze_completed_class_allies: bool = False,
         policy_router: MultiAgentPolicyRouter | None = None,
         rule_based_enemy_policy: bool | Any = False,
         random_policy: bool | Any = False,
@@ -292,6 +337,9 @@ class PPOTrainer:
         self.trainable_teams = (
             None if trainable_teams is None else {Team(team) for team in trainable_teams}
         )
+        self.ally_policy = ally_policy
+        self.freeze_completed_class_allies = bool(freeze_completed_class_allies)
+        self.frozen_ally_policy: Any | None = None
         self.self_play_manager = self_play_manager or (
             SelfPlayManager(self_play_config) if self_play_config is not None else None
         )
@@ -310,11 +358,18 @@ class PPOTrainer:
             curriculum_window_size=curriculum_window_size,
             curriculum_level=curriculum_level,
         )
-        self.current_curriculum_level = (
-            clamp_curriculum_level(self.curriculum_config.initial_level)
-            if self.curriculum_config.enabled
-            else None
-        )
+        self.current_curriculum_level = None
+        if self.curriculum_config.enabled:
+            if self.encounter_generator is not None:
+                self.current_curriculum_level = (
+                    self.encounter_generator.clamp_curriculum_level(
+                        self.curriculum_config.initial_level
+                    )
+                )
+            else:
+                self.current_curriculum_level = clamp_curriculum_level(
+                    self.curriculum_config.initial_level
+                )
         if self.current_curriculum_level is not None:
             self.current_curriculum_level = min(
                 self.current_curriculum_level,
@@ -323,11 +378,20 @@ class PPOTrainer:
         self.curriculum_recent_wins: list[bool] = []
         self.curriculum_transition_log: list[str] = []
         self.curriculum_updates_on_level = 0
+        self.curriculum_promoted_since_update = False
+        self.curriculum_stage_changed = False
         self.curriculum_success_team = self._resolve_curriculum_success_team()
         if self.curriculum_config.enabled and self.encounter_generator is not None:
+            self.encounter_generator.curriculum_kind = self.curriculum_config.kind
+            self.encounter_generator.rehearsal_probability = (
+                self.curriculum_config.rehearsal_probability
+            )
             self.encounter_generator.set_curriculum_level(self.current_curriculum_level)
+        self.completed_training_classes = self._completed_classes_before_current_stage()
+        self._refresh_frozen_ally_policy()
         self._initialize_parallel_environments()
         self.episode_steps_by_env = [0 for _ in self.environments]
+        self.target_class_activity_by_env = [False for _ in self.environments]
 
     def collect_episode(
         self,
@@ -341,6 +405,7 @@ class PPOTrainer:
             raise ValueError("max_steps must be greater than zero")
         if reset:
             self._reset_environment_for_episode()
+        self.target_class_activity_by_env[0] = False
 
         rollout = RolloutBuffer()
         action_counts = _empty_action_counts()
@@ -373,6 +438,7 @@ class PPOTrainer:
             action_counts[_action_count_name(action_output)] += 1
             action = self._decode_model_action(action_output, state, actor_id)
             result = self.environment.step(action)
+            self._record_target_class_activity(0, state, actor, action, result)
             done = self.environment.is_done()
             rollout.append(
                 actor_observation,
@@ -383,6 +449,8 @@ class PPOTrainer:
                 critic_observation=critic_observation,
                 actor_id=actor_id,
                 team=actor.team if actor is not None else None,
+                actor_class=getattr(actor, "class_name", None),
+                trainable_transition=self._is_transition_trainable(actor, state),
             )
 
             if done:
@@ -395,15 +463,32 @@ class PPOTrainer:
             winner=self.environment.get_winner(),
             action_counts=action_counts,
         )
+        self._apply_terminal_training_reward(
+            rollout,
+            0,
+            winner=stats.winner,
+            timeout=stats.winner is None and not self.environment.is_done(),
+        )
+        stats = EpisodeStats(
+            total_reward=sum(rollout.rewards),
+            length=len(rollout),
+            winner=stats.winner,
+            action_counts=action_counts,
+        )
         if stats.winner is not None:
             rollout.episode_winners.append(stats.winner)
-        self.record_curriculum_result(stats.winner)
+        self.record_curriculum_result(
+            stats.winner,
+            include=not state.curriculum_is_rehearsal,
+            target_class_active=self.target_class_activity_by_env[0],
+        )
         return rollout, stats
 
     def collect_rollout(
         self,
         rollout_steps: int | None = None,
         max_episode_steps: int | None = None,
+        max_episode_steps_per_creature: int | None = None,
     ) -> RolloutBuffer:
         """Collect one fixed-length rollout from one or more environments."""
 
@@ -412,6 +497,11 @@ class PPOTrainer:
             raise ValueError("rollout_steps must be greater than zero")
         if max_episode_steps is not None and max_episode_steps <= 0:
             raise ValueError("max_episode_steps must be greater than zero")
+        if (
+            max_episode_steps_per_creature is not None
+            and max_episode_steps_per_creature <= 0
+        ):
+            raise ValueError("max_episode_steps_per_creature must be greater than zero")
 
         rollout = RolloutBuffer()
         if self.profile_rollout:
@@ -458,12 +548,24 @@ class PPOTrainer:
 
                 started = time.perf_counter()
                 result = environment.step(action)
+                self._record_target_class_activity(
+                    env_index,
+                    state,
+                    actor,
+                    action,
+                    result,
+                )
                 self._add_profile_time(rollout, "env_step", started)
                 self.episode_steps_by_env[env_index] += 1
                 environment_done = environment.is_done()
+                episode_step_limit = _effective_episode_step_limit(
+                    environment,
+                    max_episode_steps,
+                    max_episode_steps_per_creature,
+                )
                 timeout = (
-                    max_episode_steps is not None
-                    and self.episode_steps_by_env[env_index] >= max_episode_steps
+                    episode_step_limit is not None
+                    and self.episode_steps_by_env[env_index] >= episode_step_limit
                     and not environment_done
                 )
                 done = environment_done or timeout
@@ -477,17 +579,38 @@ class PPOTrainer:
                     critic_observation=entry["critic_observation"],
                     actor_id=actor_id,
                     team=actor.team,
+                    actor_class=actor.class_name,
+                    trainable_transition=self._is_transition_trainable(actor, state),
                     env_id=env_index,
                 )
                 if environment_done:
                     winner = environment.get_winner()
+                    self._apply_terminal_training_reward(
+                        rollout,
+                        env_index,
+                        winner=winner,
+                    )
                     rollout.episode_winners.append(winner)
-                    self.record_curriculum_result(winner)
+                    self.record_curriculum_result(
+                        winner,
+                        include=not state.curriculum_is_rehearsal,
+                        target_class_active=self.target_class_activity_by_env[env_index],
+                    )
                     self._reset_environment_for_episode(env_index)
                 elif timeout:
+                    self._apply_terminal_training_reward(
+                        rollout,
+                        env_index,
+                        winner=None,
+                        timeout=True,
+                    )
                     rollout.episode_winners.append(None)
                     rollout.episode_timeouts += 1
-                    self.record_curriculum_result(None)
+                    self.record_curriculum_result(
+                        None,
+                        include=not state.curriculum_is_rehearsal,
+                        target_class_active=self.target_class_activity_by_env[env_index],
+                    )
                     self._reset_environment_for_episode(env_index)
 
         rollout.last_value = self._bootstrap_value()
@@ -685,10 +808,14 @@ class PPOTrainer:
         update_started = time.perf_counter()
         self.model.train()
         data = rollout.to_tensors(self.device)
+        _sanitize_action_batches_for_masks(data["actions"], data["masks"])
         returns, advantages = self.compute_returns_and_advantages(rollout)
         advantages = _normalize_advantages(advantages)
 
-        train_indices = self._trainable_indices(data["team_ids"])
+        train_indices = self._trainable_indices(
+            data["team_ids"],
+            data["trainable_flags"],
+        )
         batch_size = int(train_indices.numel())
         minibatch_size = min(self.config.minibatch_size, batch_size)
         metrics = {
@@ -698,6 +825,7 @@ class PPOTrainer:
             "loss": 0.0,
         }
         if batch_size == 0:
+            self.record_curriculum_update()
             return metrics
         updates = 0
 
@@ -815,13 +943,31 @@ class PPOTrainer:
             self.curriculum_recent_wins
         )
 
-    def record_curriculum_result(self, winner: Team | None) -> None:
+    def record_curriculum_result(
+        self,
+        winner: Team | None,
+        *,
+        include: bool = True,
+        target_class_active: bool = True,
+    ) -> None:
         """Track an episode result and promote curriculum difficulty when ready."""
 
-        if not self.curriculum_config.enabled or self.current_curriculum_level is None:
+        if (
+            not include
+            or not self.curriculum_config.enabled
+            or self.current_curriculum_level is None
+            or self.curriculum_promoted_since_update
+        ):
             return
 
-        self.curriculum_recent_wins.append(winner is self.curriculum_success_team)
+        qualified_win = (
+            winner is self.curriculum_success_team
+            and (
+                not self._current_stage_requires_class_activity()
+                or target_class_active
+            )
+        )
+        self.curriculum_recent_wins.append(qualified_win)
         window_size = max(1, self.curriculum_config.window_size)
         if len(self.curriculum_recent_wins) > window_size:
             self.curriculum_recent_wins = self.curriculum_recent_wins[-window_size:]
@@ -841,10 +987,15 @@ class PPOTrainer:
         )
         self.curriculum_recent_wins = []
         self.curriculum_updates_on_level = 0
+        self.curriculum_promoted_since_update = True
+        self.curriculum_stage_changed = True
         if self.encounter_generator is not None:
             self.encounter_generator.set_curriculum_level(self.current_curriculum_level)
-        previous_stage = get_curriculum_stage(previous_level)
-        next_stage = get_curriculum_stage(self.current_curriculum_level)
+        previous_stage = self._get_curriculum_stage(previous_level)
+        next_stage = self._get_curriculum_stage(self.current_curriculum_level)
+        if previous_stage.phase != next_stage.phase:
+            self.completed_training_classes.update(previous_stage.trainable_classes)
+            self._refresh_frozen_ally_policy()
         message = (
             f"Curriculum advanced from level {previous_level} "
             f"({previous_stage.name}) to level {self.current_curriculum_level} "
@@ -858,12 +1009,18 @@ class PPOTrainer:
 
         if self.curriculum_config.enabled and self.current_curriculum_level is not None:
             self.curriculum_updates_on_level += 1
+            self.curriculum_promoted_since_update = False
+            if self.curriculum_stage_changed:
+                self._refresh_frozen_ally_policy()
+                for env_index in range(len(self.environments)):
+                    self._reset_environment_for_episode(env_index)
+                self.curriculum_stage_changed = False
 
     def curriculum_state_dict(self) -> dict[str, object]:
         """Return serializable curriculum training state."""
 
         stage_name = (
-            get_curriculum_stage(self.current_curriculum_level).name
+            self._get_curriculum_stage(self.current_curriculum_level).name
             if self.current_curriculum_level is not None
             else None
         )
@@ -880,6 +1037,11 @@ class PPOTrainer:
             "recent_wins": list(self.curriculum_recent_wins),
             "current_win_rate": self.current_curriculum_win_rate,
             "transition_log": list(self.curriculum_transition_log),
+            "kind": self.curriculum_config.kind,
+            "rehearsal_probability": self.curriculum_config.rehearsal_probability,
+            "terminal_defeat_penalty": self.curriculum_config.terminal_defeat_penalty,
+            "timeout_penalty": self.curriculum_config.timeout_penalty,
+            "completed_training_classes": sorted(self.completed_training_classes),
         }
 
     def _bootstrap_value(self) -> float:
@@ -917,17 +1079,48 @@ class PPOTrainer:
         actor = state.character_at(actor_id)
         if actor is None:
             raise ValueError(f"Actor {actor_id} not found")
+        training_classes = set(getattr(state, "training_classes", ()))
+        if (
+            actor.team is Team.PLAYERS
+            and training_classes
+            and actor.class_name not in training_classes
+        ):
+            if (
+                actor.class_name in self.completed_training_classes
+                and self.frozen_ally_policy is not None
+            ):
+                return self.frozen_ally_policy
+            if self.ally_policy is not None:
+                return self.ally_policy
         return self.policy_router.policy_for(actor)
 
     def _actor_observation(self, state: Any, actor_id: int, policy: Any | None = None) -> Any:
+        fast = self._use_fast_training_mode(state)
         if self._uses_entity_observation(policy):
-            return encode_entity_observation(state, actor_id, fast=self.fast_observation)
-        return encode_observation(state, actor_id, fast=self.fast_observation).to(self.device)
+            return encode_entity_observation(
+                state,
+                actor_id,
+                fast=self.fast_observation and fast,
+            )
+        return encode_observation(
+            state,
+            actor_id,
+            fast=self.fast_observation and fast,
+        ).to(self.device)
 
     def _critic_observation(self, state: Any, actor_id: int, policy: Any | None = None) -> Any:
+        fast = self._use_fast_training_mode(state)
         if self._uses_entity_observation(policy):
-            return encode_entity_observation(state, actor_id, fast=self.fast_observation)
-        return encode_observation(state, actor_id, fast=self.fast_observation).to(self.device)
+            return encode_entity_observation(
+                state,
+                actor_id,
+                fast=self.fast_observation and fast,
+            )
+        return encode_observation(
+            state,
+            actor_id,
+            fast=self.fast_observation and fast,
+        ).to(self.device)
 
     def _uses_entity_observation(self, policy: Any | None = None) -> bool:
         selected_policy = self.model if policy is None else policy
@@ -1078,8 +1271,9 @@ class PPOTrainer:
                 .cpu()
                 .tolist()
             )
-            decoder = decode_fast_training_action if self.fast_action_masks else decode_action
-            if self.fast_action_masks:
+            use_fast = self._use_fast_training_mode(state)
+            decoder = decode_fast_training_action if use_fast else decode_action
+            if use_fast:
                 return decoder(
                     int(action_category),
                     int(main_action_type),
@@ -1098,16 +1292,28 @@ class PPOTrainer:
                 int(option_index),
                 state,
                 actor_id,
-                slot_level=int(slot_level) if not self.fast_action_masks else None,
+                slot_level=int(slot_level) if not use_fast else None,
                 masks=masks,
             )
         except ValueError:
             return EndTurnAction(actor_id=actor_id)
 
     def _build_action_masks(self, state: Any, actor_id: int) -> dict[str, torch.Tensor]:
-        if self.fast_action_masks:
+        if self._use_fast_training_mode(state):
             return build_fast_training_action_masks(state, actor_id)
         return build_action_masks(state, actor_id)
+
+    def _use_fast_training_mode(self, state: Any) -> bool:
+        if not self.fast_action_masks and not self.fast_observation:
+            return False
+        if self.curriculum_config.kind != "class":
+            return True
+        level = getattr(state, "curriculum_source_level", None)
+        if level is None:
+            level = self.current_curriculum_level
+        if level is None:
+            return False
+        return self._get_curriculum_stage(level).phase == "fighter"
 
     def _add_profile_time(
         self,
@@ -1147,6 +1353,19 @@ class PPOTrainer:
             )
         elif len(self.episode_steps_by_env) > len(self.environments):
             self.episode_steps_by_env = self.episode_steps_by_env[: len(self.environments)]
+        if not hasattr(self, "target_class_activity_by_env"):
+            self.target_class_activity_by_env = []
+        if len(self.target_class_activity_by_env) < len(self.environments):
+            self.target_class_activity_by_env.extend(
+                False
+                for _ in range(
+                    len(self.environments) - len(self.target_class_activity_by_env)
+                )
+            )
+        elif len(self.target_class_activity_by_env) > len(self.environments):
+            self.target_class_activity_by_env = self.target_class_activity_by_env[
+                : len(self.environments)
+            ]
 
     def _generate_environment_for_episode(
         self,
@@ -1181,6 +1400,7 @@ class PPOTrainer:
             if env_index == 0:
                 self.environment = self.environments[0]
             self.episode_steps_by_env[env_index] = 0
+            self.target_class_activity_by_env[env_index] = False
             return
         if self.encounter_generator is not None and self.num_envs > 1:
             self.environments[env_index] = self.encounter_generator.generate_environment(
@@ -1190,11 +1410,13 @@ class PPOTrainer:
             if env_index == 0:
                 self.environment = self.environments[0]
             self.episode_steps_by_env[env_index] = 0
+            self.target_class_activity_by_env[env_index] = False
             return
         environment.reset()
         if env_index == 0:
             self.environment = environment
         self.episode_steps_by_env[env_index] = 0
+        self.target_class_activity_by_env[env_index] = False
 
     def _resolve_curriculum_config(
         self,
@@ -1218,9 +1440,22 @@ class PPOTrainer:
         )
         initial_level = curriculum_level or generator_level or base.initial_level
         max_level = max(1, min(MAX_CURRICULUM_LEVEL, int(base.max_level)))
+        if self.encounter_generator is not None:
+            self.encounter_generator.curriculum_kind = base.kind
+            max_level = max(
+                1,
+                min(self.encounter_generator.max_curriculum_level, int(base.max_level)),
+            )
         return CurriculumConfig(
             enabled=enabled,
-            initial_level=min(clamp_curriculum_level(initial_level), max_level),
+            initial_level=min(
+                (
+                    self.encounter_generator.clamp_curriculum_level(initial_level)
+                    if self.encounter_generator is not None
+                    else clamp_curriculum_level(initial_level)
+                ),
+                max_level,
+            ),
             max_level=max_level,
             win_rate_threshold=(
                 float(curriculum_win_rate_threshold)
@@ -1233,6 +1468,13 @@ class PPOTrainer:
                 else max(1, int(base.window_size))
             ),
             min_updates_per_level=max(0, int(base.min_updates_per_level)),
+            kind=base.kind,
+            rehearsal_probability=max(
+                0.0,
+                min(1.0, float(base.rehearsal_probability)),
+            ),
+            terminal_defeat_penalty=max(0.0, float(base.terminal_defeat_penalty)),
+            timeout_penalty=max(0.0, float(base.timeout_penalty)),
         )
 
     def _resolve_curriculum_success_team(self) -> Team:
@@ -1240,19 +1482,126 @@ class PPOTrainer:
             return Team.ENEMIES
         return Team.PLAYERS
 
-    def _trainable_indices(self, team_ids: torch.Tensor) -> torch.Tensor:
+    def _trainable_indices(
+        self,
+        team_ids: torch.Tensor,
+        trainable_flags: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         if self.trainable_teams is None:
-            return torch.arange(team_ids.shape[0], dtype=torch.long, device=self.device)
-        allowed_team_ids = {
-            _team_id(team)
-            for team in self.trainable_teams
-        }
-        if not allowed_team_ids:
-            return torch.empty(0, dtype=torch.long, device=self.device)
-        mask = torch.zeros_like(team_ids, dtype=torch.bool)
-        for team_id in allowed_team_ids:
-            mask = mask | (team_ids == int(team_id))
+            mask = torch.ones_like(team_ids, dtype=torch.bool)
+        else:
+            allowed_team_ids = {
+                _team_id(team)
+                for team in self.trainable_teams
+            }
+            if not allowed_team_ids:
+                return torch.empty(0, dtype=torch.long, device=self.device)
+            mask = torch.zeros_like(team_ids, dtype=torch.bool)
+            for team_id in allowed_team_ids:
+                mask = mask | (team_ids == int(team_id))
+        if trainable_flags is not None:
+            mask = mask & trainable_flags.to(device=self.device, dtype=torch.bool)
         return torch.nonzero(mask, as_tuple=False).reshape(-1)
+
+    def _is_transition_trainable(self, actor: Any, state: Any) -> bool:
+        if actor is None:
+            return False
+        if self.trainable_teams is not None and actor.team not in self.trainable_teams:
+            return False
+        training_classes = set(getattr(state, "training_classes", ()))
+        return not training_classes or actor.class_name in training_classes
+
+    def _record_target_class_activity(
+        self,
+        env_index: int,
+        state: Any,
+        actor: Any,
+        action: Any,
+        result: Any,
+    ) -> None:
+        if not getattr(result, "success", False):
+            return
+        training_classes = set(getattr(state, "training_classes", ()))
+        if actor is None or actor.class_name not in training_classes:
+            return
+        if action.__class__.__name__ in {
+            "CastSpellAction",
+            "ChannelDivinityPreserveLifeAction",
+        }:
+            self.target_class_activity_by_env[env_index] = True
+
+    def _current_stage_requires_class_activity(self) -> bool:
+        if (
+            self.curriculum_config.kind != "class"
+            or self.current_curriculum_level is None
+        ):
+            return False
+        return self._get_curriculum_stage(
+            self.current_curriculum_level
+        ).phase in {"cleric", "wizard"}
+
+    def _apply_terminal_training_reward(
+        self,
+        rollout: RolloutBuffer,
+        env_index: int,
+        *,
+        winner: Team | None,
+        timeout: bool = False,
+    ) -> None:
+        penalty = (
+            self.curriculum_config.timeout_penalty
+            if timeout
+            else (
+                self.curriculum_config.terminal_defeat_penalty
+                if winner is not None and winner is not self.curriculum_success_team
+                else 0.0
+            )
+        )
+        if penalty <= 0.0:
+            return
+        success_team_id = _team_id(self.curriculum_success_team)
+        for index in range(len(rollout.rewards) - 1, -1, -1):
+            if rollout.env_ids[index] != env_index:
+                continue
+            if not rollout.trainable_flags[index]:
+                continue
+            if rollout.team_ids[index] != success_team_id:
+                continue
+            rollout.rewards[index] -= penalty
+            return
+
+    def _get_curriculum_stage(self, level: int) -> Any:
+        if self.encounter_generator is not None:
+            return self.encounter_generator.get_curriculum_stage(level)
+        return get_curriculum_stage(level)
+
+    def _completed_classes_before_current_stage(self) -> set[str]:
+        if (
+            not self.curriculum_config.enabled
+            or self.current_curriculum_level is None
+            or self.encounter_generator is None
+            or self.curriculum_config.kind != "class"
+        ):
+            return set()
+        current_stage = self._get_curriculum_stage(self.current_curriculum_level)
+        completed: set[str] = set()
+        for stage in self.encounter_generator.curriculum_stages:
+            if stage.level >= current_stage.level:
+                break
+            if stage.phase != current_stage.phase:
+                completed.update(stage.trainable_classes)
+        return completed
+
+    def _refresh_frozen_ally_policy(self) -> None:
+        if not self.freeze_completed_class_allies or not self.completed_training_classes:
+            self.frozen_ally_policy = None
+            return
+        frozen = deepcopy(self.model)
+        frozen.to(self.device)
+        frozen.eval()
+        for parameter in frozen.parameters():
+            parameter.requires_grad_(False)
+        self.frozen_ally_policy = frozen
 
     def _padded_masks(
         self,
@@ -1380,6 +1729,81 @@ def _team_id(team: Team | None) -> int:
     if team is Team.ENEMIES:
         return 1
     return -1
+
+
+def _class_id(class_name: str | None) -> int:
+    normalized = str(class_name or "").strip().lower()
+    return {
+        "fighter": 1,
+        "cleric": 2,
+        "wizard": 3,
+    }.get(normalized, 0)
+
+
+def _sanitize_action_for_masks(
+    action: Mapping[str, torch.Tensor],
+    masks: Mapping[str, torch.Tensor],
+) -> dict[str, torch.Tensor]:
+    """Replace impossible auxiliary head choices before storing a rollout row."""
+
+    sanitized: dict[str, torch.Tensor] = {}
+    for key, value in action.items():
+        if key in {"log_prob", "entropy", "value"} or key not in masks:
+            continue
+        selected = value.detach().long().reshape(())
+        mask = masks[key].detach().bool()
+        if mask.ndim != 1:
+            sanitized[key] = selected
+            continue
+        index = int(selected.item())
+        if 0 <= index < int(mask.shape[0]) and bool(mask[index]):
+            sanitized[key] = selected
+            continue
+        valid_indices = torch.nonzero(mask, as_tuple=False).reshape(-1)
+        fallback = int(valid_indices[0].item()) if valid_indices.numel() else 0
+        sanitized[key] = torch.tensor(fallback, dtype=torch.long)
+    return sanitized
+
+
+def _sanitize_action_batches_for_masks(
+    actions: Mapping[str, torch.Tensor],
+    masks: Mapping[str, torch.Tensor],
+) -> None:
+    """Repair stale auxiliary choices before PPO validation."""
+
+    for key, action in actions.items():
+        mask = masks.get(key)
+        if mask is None or action.ndim != 1 or mask.ndim != 2:
+            continue
+        if action.shape[0] != mask.shape[0]:
+            continue
+        safe_action = action.clamp(min=0, max=max(0, mask.shape[1] - 1))
+        rows = torch.arange(action.shape[0], device=action.device)
+        valid = (action >= 0) & (action < mask.shape[1])
+        if mask.shape[1] > 0:
+            valid = valid & mask[rows, safe_action]
+        invalid_rows = torch.nonzero(~valid, as_tuple=False).reshape(-1)
+        for row in invalid_rows.tolist():
+            allowed = torch.nonzero(mask[row], as_tuple=False).reshape(-1)
+            action[row] = int(allowed[0].item()) if allowed.numel() else 0
+
+
+def _effective_episode_step_limit(
+    environment: CombatEnvironment,
+    max_episode_steps: int | None,
+    max_episode_steps_per_creature: int | None,
+) -> int | None:
+    """Return a timeout that grows with encounter size."""
+
+    limits: list[int] = []
+    if max_episode_steps is not None:
+        limits.append(int(max_episode_steps))
+    if max_episode_steps_per_creature is not None:
+        creature_count = len(getattr(environment.combat_state, "characters", []) or [])
+        limits.append(max(1, creature_count) * int(max_episode_steps_per_creature))
+    if not limits:
+        return None
+    return max(limits)
 
 
 def _detach_observation(observation: Any) -> Any:

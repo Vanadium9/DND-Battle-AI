@@ -1,4 +1,5 @@
 from pathlib import Path
+from uuid import uuid4
 
 import torch
 
@@ -8,7 +9,9 @@ from agents.action_space import build_fast_training_action_masks
 from combat import CombatEnvironment, EncounterGenerator, FighterArcher, Goblin, GridMap, MAX_CURRICULUM_LEVEL, Position
 from scripts.train_ppo import (
     aggregate_action_distribution,
+    append_metrics_csv,
     build_curriculum_config,
+    build_metrics_row,
     build_model,
     build_training_policy_kwargs,
     default_checkpoint_for_model,
@@ -19,6 +22,7 @@ from scripts.train_ppo import (
     load_frozen_policy,
     load_checkpoint_for_training,
     resolve_device,
+    training_fast_mode_description,
 )
 from configs import PPOConfig
 from training import CurriculumConfig, EpisodeStats, PPOTrainer, RolloutBuffer
@@ -206,6 +210,42 @@ def test_build_curriculum_config_loads_yaml_when_enabled() -> None:
     assert config.min_updates_per_level == 10
 
 
+def test_build_class_curriculum_config_loads_phased_training_settings() -> None:
+    args = type(
+        "Args",
+        (),
+        {
+            "curriculum": False,
+            "class_curriculum": True,
+            "curriculum_config": "configs/train_curriculum.yaml",
+            "class_curriculum_config": "configs/train_class_curriculum.yaml",
+            "curriculum_level": None,
+            "curriculum_max_level": None,
+            "curriculum_threshold": None,
+            "curriculum_window_size": None,
+            "curriculum_min_updates_per_level": None,
+        },
+    )()
+
+    config = build_curriculum_config(args)
+
+    assert config.enabled is True
+    assert config.kind == "class"
+    assert config.max_level == 14
+    assert config.rehearsal_probability == 0.05
+    assert config.terminal_defeat_penalty == 5.0
+    assert config.timeout_penalty == 1.0
+
+
+def test_class_curriculum_reports_fighter_only_fast_mode() -> None:
+    trainer = make_script_trainer()
+    trainer.fast_action_masks = True
+    trainer.fast_observation = True
+    trainer.curriculum_config = CurriculumConfig(enabled=True, kind="class")
+
+    assert training_fast_mode_description(trainer) == "fighter_stages_only"
+
+
 def test_format_update_report_includes_batched_metrics() -> None:
     rollout = RolloutBuffer()
     rollout.rewards.extend([1.0, -0.5, 0.25])
@@ -235,6 +275,34 @@ def test_format_update_report_includes_batched_metrics() -> None:
     assert "average_step_reward=0.250" in report
     assert "policy_loss=0.1000" in report
     assert "checkpoint=model.pt" in report
+
+
+def test_metrics_csv_writes_header_and_reward() -> None:
+    rollout = RolloutBuffer()
+    rollout.rewards.extend([1.0, -0.5, 0.25])
+    rollout.episode_winners.extend([Team.PLAYERS])
+    metrics = {
+        "policy_loss": 0.1,
+        "value_loss": 0.2,
+        "entropy": 0.3,
+        "loss": 0.4,
+    }
+    row = build_metrics_row(
+        update_index=7,
+        rollout=rollout,
+        metrics=metrics,
+        checkpoint_path=Path("model.pt"),
+    )
+    csv_dir = Path("logs") / "test_train_ppo_script"
+    csv_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = csv_dir / f"training_metrics_{uuid4().hex}.csv"
+
+    append_metrics_csv(csv_path, row)
+
+    text = csv_path.read_text(encoding="utf-8")
+    assert "update,rollout_steps,episodes_finished" in text
+    assert "average_step_reward" in text
+    assert "0.25" in text
 
 
 def test_format_update_report_includes_curriculum_status() -> None:

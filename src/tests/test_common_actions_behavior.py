@@ -16,6 +16,7 @@ from combat import (
     StabilizeAction,
     Stats,
     Team,
+    TerrainType,
     WeaponAttack,
 )
 
@@ -158,6 +159,31 @@ def test_hide_can_set_hidden_true(monkeypatch) -> None:
     assert result.success
     assert hero.hidden is True
     assert "succeeds" in result.description
+
+
+def test_hide_can_use_passive_perception_dc(monkeypatch) -> None:
+    hero = make_character("Hero", Position(0, 0), Team.PLAYERS, stats=Stats(dex=10))
+    enemy = make_character("Observer", Position(1, 0), Team.ENEMIES, stats=Stats(wis=18))
+    state = CombatState(
+        characters=[hero, enemy],
+        grid_map=GridMap(
+            width=4,
+            height=4,
+            terrain_grid=[
+                [TerrainType.LOW_COVER, TerrainType.NORMAL, TerrainType.NORMAL, TerrainType.NORMAL],
+                [TerrainType.NORMAL, TerrainType.NORMAL, TerrainType.NORMAL, TerrainType.NORMAL],
+                [TerrainType.NORMAL, TerrainType.NORMAL, TerrainType.NORMAL, TerrainType.NORMAL],
+                [TerrainType.NORMAL, TerrainType.NORMAL, TerrainType.NORMAL, TerrainType.NORMAL],
+            ],
+        ),
+    )
+    monkeypatch.setattr("combat.common_actions.random.randint", lambda _low, _high: 10)
+
+    result = HideAction(actor_id=0, dc=None, observer_id=1).execute(state)
+
+    assert result.success
+    assert hero.hidden is False
+    assert "Observer passive Perception 16" in result.description
 
 
 def test_grapple_sets_grappled_on_successful_contested_check(monkeypatch) -> None:

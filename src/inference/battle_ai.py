@@ -14,13 +14,14 @@ from agents import (
     SimpleCasterAgent,
     SimpleHealerAgent,
 )
-from combat import CombatAction, CombatState
+from combat import CombatAction, CombatState, Team
 from inference.action_selector import (
     ActionSelectionError,
     select_action_with_policy,
     select_fallback_action,
 )
 from inference.policy_loader import LoadedPolicy, load_policy_checkpoint
+from training import aggressive_combat_policy
 
 
 FALLBACK_AGENT_TYPES: dict[str, type[RuleBasedAgent]] = {
@@ -56,6 +57,7 @@ class BattleAIService:
         self._settings = BattleAISettings(fallback_agent=fallback_agent)
         self._seed = seed
         self._fallback_agent = self._create_fallback_agent(fallback_agent)
+        self._enemy_fallback_policy = aggressive_combat_policy(seed=seed)
 
     @property
     def settings(self) -> BattleAISettings:
@@ -100,6 +102,14 @@ class BattleAIService:
     def select_action(self, combat_state: CombatState, actor_id: int) -> CombatAction:
         """Select one concrete action for the current actor."""
 
+        actor = combat_state.character_at(actor_id)
+        if actor is not None and actor.team is Team.ENEMIES:
+            return select_fallback_action(
+                self._enemy_fallback_policy,
+                combat_state,
+                actor_id,
+                deterministic=True,
+            )
         if self._loaded_policy is None:
             return select_fallback_action(
                 self._fallback_agent,

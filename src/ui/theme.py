@@ -53,7 +53,7 @@ def apply_theme(app: QApplication) -> None:
         }
 
         QLabel#navigationTitle {
-            color: #f7fafc;
+            color: #17202a;
             font-size: 14pt;
             font-weight: 700;
             padding: 8px 10px;

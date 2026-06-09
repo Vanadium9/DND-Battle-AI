@@ -12,6 +12,8 @@ Roadmap фиксирует текущее состояние D&D Battle AI и б
 - Карты через JSON-конфиги в `maps/`: terrain grid, cover, obstacles, spawn zones.
 - PPO/GNN модель, action masks, entity-based observations, GNN encoder.
 - Curriculum training с уровнями сложности, multi-env rollouts, fast warm-up режимами и checkpoint resume.
+- Поэтапное обучение Fighter, Cleric и Wizard с последующей интеграцией общей политики.
+- Rehearsal прошлых классов и замороженные политики обученных союзников для снижения забывания.
 - PySide6 desktop GUI поверх существующего combat engine.
 
 ## GUI
@@ -75,6 +77,8 @@ GUI используется для демонстрации, запуска б�
 - persistent `max_episode_steps` timeout между PPO update-ами;
 - checkpoint resume по умолчанию и `--no-resume` для fresh start;
 - curriculum stages для уровней 1-5 и разных типов encounter;
+- class curriculum: Fighter -> Cleric -> Wizard -> совместная партия;
+- фильтрация PPO-переходов по целевому классу и отдельные checkpoint-снимки классовых фаз;
 - fast warm-up режимы `--fast-action-masks` и `--fast-observation`;
 - profiling training output: observation, masks, model_act, decode, env_step, update;
 - evaluation scenarios by level;

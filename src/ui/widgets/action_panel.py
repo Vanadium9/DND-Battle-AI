@@ -86,6 +86,8 @@ class ActionPanel(QWidget):
             column = 0
             for label in stable_labels:
                 option = grouped.get(group_name, {}).get(_slot_key(label))
+                if group_name == "Spells" and option is None:
+                    continue
                 if option is not None:
                     used_option_ids.add(option.id)
                 self._add_slot_button(
@@ -203,16 +205,7 @@ STABLE_SLOTS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "Shove",
         ),
     ),
-    (
-        "Spells",
-        (
-            "Cast Spell",
-            "Action Surge",
-            "Second Wind",
-            "Preserve Life",
-            "Healing Word",
-        ),
-    ),
+    ("Spells", ()),
     ("Inventory", ("Potion of Healing", "Bomb", "Alchemist Fire", "HealerKit")),
     ("End Turn", ("End Turn",)),
 )

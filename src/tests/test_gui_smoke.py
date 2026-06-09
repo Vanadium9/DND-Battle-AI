@@ -18,7 +18,7 @@ from ui.main_window import MainWindow
 from ui.navigation import NAVIGATION_ITEMS
 from ui.screens import BattleScreen, CharacterBuilderScreen
 from ui.services import BattleSetupRequest, BattleSetupResult, BattleSetupService, ModelService
-from ui.text import translate_battle_log
+from ui.text import ru_sentence, translate_battle_log
 from ui.widgets.inventory_editor import InventoryEditor
 from ui.widgets.stat_editor import StatEditor
 
@@ -237,6 +237,25 @@ def test_battle_log_translates_monster_names() -> None:
     assert "Гоблин-лучник" in text
     assert "Орк-воин" in text
 
+
+
+
+def test_battle_log_translates_core_combat_terms() -> None:
+    text = translate_battle_log(
+        "Fighter Level 1 Basic attacks Goblin with Longsword: "
+        "attack 1: hit (18 vs AC 13; d20=16, modifier=2) for 6 damage. "
+        "Total damage: 6. Action spent: action_available=False."
+    )
+
+    for fragment in ("attacks", "damage", "Action spent", "AC", "modifier", "action_available", "hit"):
+        assert fragment not in text
+
+def test_action_tooltip_translates_spell_prefix_name_and_slot() -> None:
+    text = ru_sentence("Spell: Fireball (slot 3)")
+
+    assert "Spell" not in text
+    assert "Fireball" not in text
+    assert "slot" not in text
 
 def test_battle_screen_click_prefers_alive_target_over_corpse() -> None:
     app = create_app(["test_gui_battle_screen_corpse_target"])

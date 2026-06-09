@@ -400,6 +400,9 @@ class CombatState:
 
     characters: list[Character] = field(default_factory=list)
     grid_map: GridMap | None = None
+    training_classes: tuple[str, ...] = ()
+    curriculum_source_level: int | None = None
+    curriculum_is_rehearsal: bool = False
     round_number: int = 1
     turn_index: int = 0
     initiative_order: list[int] = field(default_factory=list)

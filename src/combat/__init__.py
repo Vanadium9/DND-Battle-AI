@@ -119,7 +119,9 @@ from combat.damage import (
 )
 from combat.environment import CombatEnvironment
 from combat.encounter_generator import (
+    CLASS_CURRICULUM_STAGES,
     CURRICULUM_STAGES,
+    MAX_CLASS_CURRICULUM_LEVEL,
     MAX_CURRICULUM_LEVEL,
     CurriculumStage,
     EncounterGenerator,
@@ -327,6 +329,7 @@ __all__ = [
     "COMMON_ACTION_STABILIZE",
     "COMMON_ACTION_USE_OBJECT",
     "CR_XP_TABLE",
+    "CLASS_CURRICULUM_STAGES",
     "CURRICULUM_STAGES",
     "CastSpellAction",
     "ChannelDivinityPreserveLifeAction",
@@ -379,6 +382,7 @@ __all__ = [
     "ItemDefinition",
     "ItemEffect",
     "ItemTargetType",
+    "MAX_CLASS_CURRICULUM_LEVEL",
     "MAX_CURRICULUM_LEVEL",
     "MapConfig",
     "MapConfigValidationError",

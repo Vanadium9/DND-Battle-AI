@@ -6,7 +6,7 @@
   "level": 1,
   "experience": 0,
   "race_name": "Elf",
-  "role": "MELEE_DAMAGE",
+  "role": "CASTER",
   "stats": {
     "str": 9,
     "dex": 14,

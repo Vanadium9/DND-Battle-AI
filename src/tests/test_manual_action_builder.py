@@ -98,6 +98,25 @@ def test_manual_builder_exposes_spell_slot_and_aoe_cell_options() -> None:
     assert action.is_valid(state)
 
 
+def test_manual_builder_does_not_expose_unowned_class_features_as_spells() -> None:
+    wizard = WizardEvoker(Position(0, 0))
+    goblin = GoblinMelee(Position(3, 0))
+    state = CombatState(
+        characters=[wizard, goblin],
+        grid_map=GridMap(width=8, height=8),
+        initiative_order=[0, 1],
+    )
+    builder = ManualActionBuilder()
+
+    plan = builder.build_plan(state, actor_id=0)
+    spell_labels = [option.label for option in plan.groups["Spells"]]
+
+    assert spell_labels
+    assert not any("Second Wind" in label for label in spell_labels)
+    assert not any("Action Surge" in label for label in spell_labels)
+    assert any("Fireball" in label for label in spell_labels)
+
+
 def _duel_state() -> CombatState:
     hero = Character(
         name="Hero",

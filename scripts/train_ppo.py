@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 from collections import Counter
 from pathlib import Path
 import random
@@ -52,6 +53,8 @@ def main() -> None:
             if curriculum_config.enabled
             else None
         ),
+        curriculum_kind=curriculum_config.kind,
+        rehearsal_probability=curriculum_config.rehearsal_probability,
     )
     environment = (
         generator.generate_curriculum_environment(
@@ -94,7 +97,9 @@ def main() -> None:
         f"train_side={args.train_side} "
         f"opponent_policy={args.opponent_policy} "
         f"curriculum={trainer.curriculum_config.enabled} "
+        f"curriculum_kind={trainer.curriculum_config.kind} "
         f"curriculum_level={trainer.curriculum_level} "
+        f"fast_mode={training_fast_mode_description(trainer)} "
         f"checkpoint_status={checkpoint_status} "
         f"checkpoint={checkpoint_path}",
         flush=True,
@@ -106,13 +111,31 @@ def main() -> None:
         trainer,
         checkpoint_status,
     )
+    metrics_csv_path = resolve_project_path(args.metrics_csv) if args.metrics_csv else None
+    saved_class_phases = set(trainer.completed_training_classes)
+    best_stage_scores: dict[int, float] = {}
 
     for update_index in range(1, update_count + 1):
         rollout = trainer.collect_rollout(
             args.rollout_steps,
             max_episode_steps=args.max_episode_steps,
+            max_episode_steps_per_creature=args.max_episode_steps_per_creature,
+        )
+        save_best_stage_checkpoint(
+            trainer,
+            best_stage_scores,
+            model_type=args.model_type,
         )
         metrics = trainer.update(rollout)
+        for class_name in sorted(trainer.completed_training_classes - saved_class_phases):
+            phase_path = trainer.save_checkpoint(
+                f"{args.model_type}_{class_name.lower()}_policy.pt"
+            )
+            print(
+                f"class_phase_checkpoint={class_name} path={phase_path}",
+                flush=True,
+            )
+        saved_class_phases.update(trainer.completed_training_classes)
         for message in trainer.curriculum_transition_log[reported_curriculum_transitions:]:
             print(f"curriculum_transition={message}", flush=True)
         reported_curriculum_transitions = len(trainer.curriculum_transition_log)
@@ -120,17 +143,27 @@ def main() -> None:
         should_report = update_index % args.log_interval == 0 or update_index == update_count
         if should_report:
             last_checkpoint = trainer.save_checkpoint(checkpoint_path.name)
-            print(
-                format_update_report(
-                    update_index,
-                    rollout,
-                    metrics,
-                    last_checkpoint,
-                    train_side=args.train_side,
-                    trainer=trainer,
-                ),
-                flush=True,
+            report = format_update_report(
+                update_index,
+                rollout,
+                metrics,
+                last_checkpoint,
+                train_side=args.train_side,
+                trainer=trainer,
             )
+            print(report, flush=True)
+            if metrics_csv_path is not None:
+                append_metrics_csv(
+                    metrics_csv_path,
+                    build_metrics_row(
+                        update_index,
+                        rollout,
+                        metrics,
+                        last_checkpoint,
+                        train_side=args.train_side,
+                        trainer=trainer,
+                    ),
+                )
 
     if last_checkpoint != checkpoint_path:
         trainer.save_checkpoint(checkpoint_path.name)
@@ -160,7 +193,19 @@ def parse_args() -> argparse.Namespace:
         "--max-episode-steps",
         type=int,
         default=256,
-        help="Force-reset a combat episode after this many environment steps.",
+        help=(
+            "Minimum episode step limit. The effective limit also scales with "
+            "--max-episode-steps-per-creature."
+        ),
+    )
+    parser.add_argument(
+        "--max-episode-steps-per-creature",
+        type=int,
+        default=64,
+        help=(
+            "Scale episode timeout by initial creature count. Effective limit is "
+            "max(--max-episode-steps, creatures * this value)."
+        ),
     )
     parser.add_argument(
         "--num-envs",
@@ -184,10 +229,24 @@ def parse_args() -> argparse.Namespace:
         help="Train on staged curriculum encounters instead of random encounters.",
     )
     parser.add_argument(
+        "--class-curriculum",
+        action="store_true",
+        help=(
+            "Train Fighter, Cleric and Wizard in separate phases, then jointly fine-tune "
+            "the party. Includes rehearsal of earlier class stages."
+        ),
+    )
+    parser.add_argument(
         "--curriculum-config",
         type=str,
         default=str(PROJECT_ROOT / "configs" / "train_curriculum.yaml"),
         help="YAML config for staged curriculum training.",
+    )
+    parser.add_argument(
+        "--class-curriculum-config",
+        type=str,
+        default=str(PROJECT_ROOT / "configs" / "train_class_curriculum.yaml"),
+        help="YAML config for phased class training.",
     )
     parser.add_argument(
         "--curriculum-level",
@@ -243,6 +302,12 @@ def parse_args() -> argparse.Namespace:
         help="Checkpoint and metric print interval in update iterations.",
     )
     parser.add_argument(
+        "--metrics-csv",
+        type=str,
+        default=None,
+        help="Optional CSV path for training metrics, useful for plotting reward curves.",
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=0,
@@ -296,6 +361,27 @@ def parse_args() -> argparse.Namespace:
         help="Model type for --opponent-checkpoint. Defaults to --model-type.",
     )
     parser.add_argument(
+        "--ally-policy",
+        choices=("adaptive", "aggressive", "rule_based", "random", "checkpoint"),
+        default="adaptive",
+        help=(
+            "Policy for non-target player classes during class curriculum. adaptive uses "
+            "heuristics for untrained classes and a frozen model snapshot for completed classes."
+        ),
+    )
+    parser.add_argument(
+        "--ally-checkpoint",
+        type=str,
+        default=None,
+        help="Checkpoint used when --ally-policy checkpoint.",
+    )
+    parser.add_argument(
+        "--ally-model-type",
+        choices=("mlp", "gnn"),
+        default=None,
+        help="Model type for --ally-checkpoint. Defaults to --model-type.",
+    )
+    parser.add_argument(
         "--device",
         choices=("auto", "cpu", "cuda"),
         default="auto",
@@ -310,6 +396,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("--rollout-steps must be greater than zero")
     if args.max_episode_steps <= 0:
         parser.error("--max-episode-steps must be greater than zero")
+    if args.max_episode_steps_per_creature <= 0:
+        parser.error("--max-episode-steps-per-creature must be greater than zero")
     if args.num_envs <= 0:
         parser.error("--num-envs must be greater than zero")
     if args.curriculum_level is not None and args.curriculum_level <= 0:
@@ -335,6 +423,10 @@ def parse_args() -> argparse.Namespace:
         parser.error("--device cuda was requested, but torch.cuda.is_available() is False")
     if args.opponent_policy == "checkpoint" and not args.opponent_checkpoint:
         parser.error("--opponent-checkpoint is required when --opponent-policy checkpoint")
+    if args.ally_policy == "checkpoint" and not args.ally_checkpoint:
+        parser.error("--ally-checkpoint is required when --ally-policy checkpoint")
+    if args.class_curriculum and args.train_side != "players":
+        parser.error("--class-curriculum currently requires --train-side players")
     return args
 
 
@@ -342,8 +434,17 @@ def build_curriculum_config(args: argparse.Namespace) -> CurriculumConfig:
     """Resolve curriculum settings from CLI without enabling it by accident."""
 
     min_updates_per_level = getattr(args, "curriculum_min_updates_per_level", None)
-    if args.curriculum:
-        config_path = Path(args.curriculum_config)
+    class_curriculum = bool(getattr(args, "class_curriculum", False))
+    if args.curriculum or class_curriculum:
+        config_path = Path(
+            getattr(
+                args,
+                "class_curriculum_config",
+                PROJECT_ROOT / "configs" / "train_class_curriculum.yaml",
+            )
+            if class_curriculum
+            else args.curriculum_config
+        )
         base = load_curriculum_config(config_path) if config_path.exists() else CurriculumConfig()
         return CurriculumConfig(
             enabled=True,
@@ -360,6 +461,14 @@ def build_curriculum_config(args: argparse.Namespace) -> CurriculumConfig:
                 if min_updates_per_level is not None
                 else base.min_updates_per_level
             ),
+            kind="class" if class_curriculum else base.kind,
+            rehearsal_probability=(
+                base.rehearsal_probability if class_curriculum else 0.0
+            ),
+            terminal_defeat_penalty=(
+                base.terminal_defeat_penalty if class_curriculum else 0.0
+            ),
+            timeout_penalty=base.timeout_penalty if class_curriculum else 0.0,
         )
     if args.curriculum_level is not None:
         return CurriculumConfig(
@@ -373,6 +482,10 @@ def build_curriculum_config(args: argparse.Namespace) -> CurriculumConfig:
             ),
             window_size=int(args.curriculum_window_size or 1),
             min_updates_per_level=int(min_updates_per_level or 0),
+            kind="general",
+            rehearsal_probability=0.0,
+            terminal_defeat_penalty=0.0,
+            timeout_penalty=0.0,
         )
     return CurriculumConfig(enabled=False)
 
@@ -409,6 +522,23 @@ def default_checkpoint_for_model(model_type: str) -> Path:
     return DEFAULT_GNN_CHECKPOINT if model_type == "gnn" else DEFAULT_MLP_CHECKPOINT
 
 
+def training_fast_mode_description(trainer: PPOTrainer) -> str:
+    if not trainer.fast_action_masks and not trainer.fast_observation:
+        return "disabled"
+    if trainer.curriculum_config.kind == "class":
+        return "fighter_stages_only"
+    return "enabled"
+
+
+def resolve_project_path(path_value: str) -> Path:
+    """Resolve CLI paths relative to the project root."""
+
+    path = Path(path_value)
+    if path.is_absolute():
+        return path
+    return PROJECT_ROOT / path
+
+
 def build_model(model_type: str) -> torch.nn.Module:
     """Create the trainable policy model selected by CLI."""
 
@@ -433,11 +563,14 @@ def build_training_policy_kwargs(
 
     opponent = build_opponent_policy(args, device)
     if train_side == "players":
-        return {
+        kwargs: dict[str, object] = {
             "shared_policy": model,
             "enemy_policy": opponent,
             "trainable_teams": {Team.PLAYERS},
         }
+        if getattr(args, "class_curriculum", False):
+            kwargs.update(build_ally_policy_kwargs(args, device))
+        return kwargs
     if train_side == "enemies":
         return {
             "shared_policy": model,
@@ -446,6 +579,36 @@ def build_training_policy_kwargs(
             "trainable_teams": {Team.ENEMIES},
         }
     raise ValueError(f"Unknown train_side: {train_side}")
+
+
+def build_ally_policy_kwargs(
+    args: argparse.Namespace,
+    device: torch.device,
+) -> dict[str, object]:
+    """Build control for player classes that are not the current training target."""
+
+    ally_policy = str(args.ally_policy)
+    if ally_policy == "adaptive":
+        return {
+            "ally_policy": aggressive_combat_policy(seed=args.seed + 1),
+            "freeze_completed_class_allies": True,
+        }
+    if ally_policy == "aggressive":
+        return {"ally_policy": aggressive_combat_policy(seed=args.seed + 1)}
+    if ally_policy == "rule_based":
+        return {"ally_policy": rule_based_enemy_policy()}
+    if ally_policy == "random":
+        return {"ally_policy": random_policy(seed=args.seed + 1)}
+    if ally_policy == "checkpoint":
+        checkpoint_path = resolve_project_path(str(args.ally_checkpoint))
+        return {
+            "ally_policy": load_frozen_policy(
+                checkpoint_path,
+                str(args.ally_model_type or args.model_type),
+                device,
+            )
+        }
+    raise ValueError(f"Unknown ally_policy: {ally_policy}")
 
 
 def build_opponent_policy(args: argparse.Namespace, device: torch.device) -> object:
@@ -520,6 +683,7 @@ def load_checkpoint_for_training(
 
     if restore_curriculum and trainer.curriculum_config.enabled:
         _restore_curriculum_state(trainer, checkpoint)
+        trainer._refresh_frozen_ally_policy()
         for env_index in range(len(trainer.environments)):
             trainer._reset_environment_for_episode(env_index)
     return f"loaded:{optimizer_status}"
@@ -529,6 +693,12 @@ def _restore_curriculum_state(
     trainer: PPOTrainer,
     checkpoint: dict[str, object],
 ) -> None:
+    curriculum_state = checkpoint.get("curriculum_state")
+    if isinstance(curriculum_state, dict):
+        saved_kind = str(curriculum_state.get("kind", "general"))
+        if saved_kind != trainer.curriculum_config.kind:
+            return
+
     curriculum_level = checkpoint.get("curriculum_level")
     if curriculum_level is not None:
         trainer.current_curriculum_level = min(
@@ -538,7 +708,6 @@ def _restore_curriculum_state(
         if trainer.encounter_generator is not None:
             trainer.encounter_generator.set_curriculum_level(trainer.current_curriculum_level)
 
-    curriculum_state = checkpoint.get("curriculum_state")
     if isinstance(curriculum_state, dict):
         recent_wins = curriculum_state.get("recent_wins", [])
         if isinstance(recent_wins, list):
@@ -549,6 +718,11 @@ def _restore_curriculum_state(
         updates_on_level = curriculum_state.get("updates_on_level")
         if updates_on_level is not None:
             trainer.curriculum_updates_on_level = max(0, int(updates_on_level))
+        completed_classes = curriculum_state.get("completed_training_classes", [])
+        if isinstance(completed_classes, list):
+            trainer.completed_training_classes = {
+                str(value) for value in completed_classes
+            }
 
 
 def format_report(
@@ -574,6 +748,37 @@ def format_report(
     )
 
 
+def save_best_stage_checkpoint(
+    trainer: PPOTrainer,
+    best_stage_scores: dict[int, float],
+    *,
+    model_type: str,
+) -> Path | None:
+    """Persist the best full-window policy snapshot for the active class stage."""
+
+    if (
+        not trainer.curriculum_config.enabled
+        or trainer.curriculum_config.kind != "class"
+        or trainer.curriculum_level is None
+        or len(trainer.curriculum_recent_wins) < trainer.curriculum_config.window_size
+    ):
+        return None
+    level = trainer.curriculum_level
+    score = trainer.current_curriculum_win_rate
+    if score <= best_stage_scores.get(level, -1.0):
+        return None
+    best_stage_scores[level] = score
+    path = trainer.save_checkpoint(
+        f"{model_type}_class_stage_{level}_best.pt"
+    )
+    print(
+        f"stage_best_checkpoint=level_{level} "
+        f"window_win_rate={score:.3f} path={path}",
+        flush=True,
+    )
+    return path
+
+
 def format_update_report(
     update_index: int,
     rollout: RolloutBuffer,
@@ -589,6 +794,7 @@ def format_update_report(
     winners = [winner for winner in rollout.episode_winners if winner is not None]
     win_rate_report = _format_win_rate_report(winners, train_side)
     curriculum_report = _format_curriculum_report(trainer)
+    class_sample_report = _format_class_samples(rollout)
     average_reward = (
         sum(rollout.rewards) / len(rollout.rewards)
         if rollout.rewards
@@ -602,6 +808,7 @@ def format_update_report(
         f"timeouts={rollout.episode_timeouts} "
         f"{win_rate_report} "
         f"average_step_reward={average_reward:.3f} "
+        f"{class_sample_report}"
         f"{curriculum_report}"
         f"policy_loss={metrics.get('policy_loss', 0.0):.4f} "
         f"value_loss={metrics.get('value_loss', 0.0):.4f} "
@@ -610,6 +817,105 @@ def format_update_report(
         f"{format_profile_times(rollout)}"
         f"checkpoint={checkpoint_path}"
     )
+
+
+def build_metrics_row(
+    update_index: int,
+    rollout: RolloutBuffer,
+    metrics: dict[str, float],
+    checkpoint_path: Path,
+    train_side: str = "players",
+    trainer: PPOTrainer | None = None,
+) -> dict[str, object]:
+    """Build a stable CSV row for plotting training curves."""
+
+    finished = len(rollout.episode_winners)
+    completed = finished - rollout.episode_timeouts
+    winners = [winner for winner in rollout.episode_winners if winner is not None]
+    average_reward = (
+        sum(rollout.rewards) / len(rollout.rewards)
+        if rollout.rewards
+        else 0.0
+    )
+    trained_team = Team.ENEMIES if train_side == "enemies" else Team.PLAYERS
+    opponent_team = Team.PLAYERS if trained_team is Team.ENEMIES else Team.ENEMIES
+    row: dict[str, object] = {
+        "update": update_index,
+        "rollout_steps": len(rollout),
+        "episodes_finished": finished,
+        "completed": completed,
+        "timeouts": rollout.episode_timeouts,
+        "trained_win_rate": (
+            _team_win_rate(winners, trained_team)
+            if train_side != "both"
+            else _team_win_rate(winners, Team.PLAYERS)
+        ),
+        "opponent_win_rate": (
+            _team_win_rate(winners, opponent_team)
+            if train_side != "both"
+            else _team_win_rate(winners, Team.ENEMIES)
+        ),
+        "average_step_reward": average_reward,
+        "trainable_samples": sum(1 for value in rollout.trainable_flags if value),
+        "fighter_samples": _class_sample_count(rollout, 1),
+        "cleric_samples": _class_sample_count(rollout, 2),
+        "wizard_samples": _class_sample_count(rollout, 3),
+        "policy_loss": metrics.get("policy_loss", 0.0),
+        "value_loss": metrics.get("value_loss", 0.0),
+        "entropy": metrics.get("entropy", 0.0),
+        "loss": metrics.get("loss", 0.0),
+        "checkpoint": str(checkpoint_path),
+    }
+    if trainer is not None and trainer.curriculum_config.enabled:
+        row.update(
+            {
+                "curriculum_level": trainer.curriculum_level or "",
+                "curriculum_stage": (
+                    ""
+                    if trainer.curriculum_level is None
+                    else get_curriculum_stage_name(
+                        trainer.curriculum_level,
+                        trainer=trainer,
+                    )
+                ),
+                "curriculum_kind": trainer.curriculum_config.kind,
+                "training_classes": ",".join(
+                    trainer._get_curriculum_stage(
+                        trainer.curriculum_level or 1
+                    ).trainable_classes
+                ),
+                "curriculum_window_size": len(trainer.curriculum_recent_wins),
+                "curriculum_window_win_rate": trainer.current_curriculum_win_rate,
+                "curriculum_threshold": trainer.curriculum_config.win_rate_threshold,
+                "curriculum_updates_on_level": trainer.curriculum_updates_on_level,
+            }
+        )
+    else:
+        row.update(
+            {
+                "curriculum_level": "",
+                "curriculum_stage": "",
+                "curriculum_window_size": "",
+                "curriculum_window_win_rate": "",
+                "curriculum_threshold": "",
+                "curriculum_updates_on_level": "",
+                "curriculum_kind": "",
+                "training_classes": "",
+            }
+        )
+    return row
+
+
+def append_metrics_csv(path: Path, row: dict[str, object]) -> None:
+    """Append one training metrics row, creating parent directories and header."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_header = not path.exists() or path.stat().st_size == 0
+    with path.open("a", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=list(row.keys()))
+        if write_header:
+            writer.writeheader()
+        writer.writerow(row)
 
 
 def _format_win_rate_report(winners: list[Team], train_side: str) -> str:
@@ -636,11 +942,18 @@ def _format_curriculum_report(trainer: PPOTrainer | None) -> str:
     stage_name = (
         "none"
         if trainer.curriculum_level is None
-        else get_curriculum_stage_name(trainer.curriculum_level)
+        else get_curriculum_stage_name(trainer.curriculum_level, trainer=trainer)
     )
+    stage = (
+        None
+        if trainer.curriculum_level is None
+        else trainer._get_curriculum_stage(trainer.curriculum_level)
+    )
+    training_classes = ",".join(stage.trainable_classes) if stage is not None else ""
     return (
         f"curriculum_level={trainer.curriculum_level} "
         f"curriculum_stage={stage_name} "
+        f"training_classes={training_classes or 'all'} "
         f"curriculum_window={len(trainer.curriculum_recent_wins)}/"
         f"{trainer.curriculum_config.window_size} "
         f"curriculum_window_win_rate={trainer.current_curriculum_win_rate:.3f} "
@@ -650,10 +963,41 @@ def _format_curriculum_report(trainer: PPOTrainer | None) -> str:
     )
 
 
-def get_curriculum_stage_name(level: int) -> str:
+def _format_class_samples(rollout: RolloutBuffer) -> str:
+    if not rollout.class_ids:
+        return ""
+    parts = []
+    for name, class_id in (("Fighter", 1), ("Cleric", 2), ("Wizard", 3)):
+        count = _class_sample_count(rollout, class_id)
+        if count:
+            parts.append(f"{name}:{count}")
+    return f"class_samples={{{','.join(parts)}}} " if parts else ""
+
+
+def _class_sample_count(rollout: RolloutBuffer, class_id: int) -> int:
+    return sum(
+        1
+        for stored_class_id, trainable in zip(
+            rollout.class_ids,
+            rollout.trainable_flags,
+        )
+        if trainable and stored_class_id == class_id
+    )
+
+
+def get_curriculum_stage_name(
+    level: int,
+    *,
+    trainer: PPOTrainer | None = None,
+) -> str:
     from combat.encounter_generator import get_curriculum_stage
 
-    return get_curriculum_stage(level).name.replace(" ", "_")
+    stage = (
+        trainer._get_curriculum_stage(level)
+        if trainer is not None
+        else get_curriculum_stage(level)
+    )
+    return stage.name.replace(" ", "_")
 
 
 def format_profile_times(rollout: RolloutBuffer) -> str:

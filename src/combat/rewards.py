@@ -53,6 +53,8 @@ class RewardConfig:
     cover_avoid_damage_reward: float = 0.05
     bad_position_penalty: float = 0.04
     wasted_item_penalty: float = 0.04
+    decisive_finisher_reward: float = 0.25
+    forgone_finisher_penalty: float = 0.20
 
 
 @dataclass(frozen=True)
@@ -89,6 +91,7 @@ class CharacterRewardSnapshot:
     damage_immunities: frozenset[str] = frozenset()
     damage_vulnerabilities: frozenset[str] = frozenset()
     available_damage_types: frozenset[str] = frozenset()
+    finisher_target_ids: frozenset[int] = frozenset()
     cover_from_enemies: int = 0
 
 
@@ -182,6 +185,11 @@ def snapshot_combat_state(state: CombatState) -> CombatRewardSnapshot:
                     character_vulnerabilities(character)
                 ),
                 available_damage_types=_available_damage_type_names(character),
+                finisher_target_ids=_available_finisher_target_ids(
+                    state,
+                    character_id,
+                    character,
+                ),
                 cover_from_enemies=_max_cover_from_enemies(state, character),
             )
         )
@@ -250,6 +258,8 @@ def calculate_combat_reward(
         "cover_avoid_damage": 0.0,
         "bad_position": 0.0,
         "wasted_item": 0.0,
+        "decisive_finisher": 0.0,
+        "forgone_finisher": 0.0,
     }
 
     if action is not None and action_success:
@@ -331,10 +341,14 @@ def _common_action_rewards(
         "cover_avoid_damage": 0.0,
         "bad_position": 0.0,
         "wasted_item": 0.0,
+        "decisive_finisher": 0.0,
+        "forgone_finisher": 0.0,
     }
 
     actor_before = _character(before, getattr(action, "actor_id", -1))
     actor_after = _character(after, getattr(action, "actor_id", -1))
+    target_before = _primary_target(before, action)
+    target_after = _primary_target(after, action)
     spell_slot_levels = _spent_spell_slot_levels(actor_before, actor_after)
     expensive_resource_spent = bool(spell_slot_levels)
 
@@ -375,7 +389,6 @@ def _common_action_rewards(
         rewards["ineffective_second_wind"] = -config.ineffective_second_wind_penalty
 
     chosen_damage_type = _action_damage_type(action)
-    target_before = _primary_target(before, action)
     if chosen_damage_type is not None and target_before is not None:
         if chosen_damage_type in target_before.damage_immunities:
             rewards["immunity_damage"] = -config.immunity_damage_penalty
@@ -390,6 +403,35 @@ def _common_action_rewards(
             rewards["effective_resource"] = config.effective_resource_reward
         if _expensive_resource_overkilled(before, action, action_result):
             rewards["resource_overkill"] = -config.resource_overkill_penalty
+
+    if (
+        action_name in {"AttackAction", "CastSpellAction", "UseObjectAction"}
+        and actor_before is not None
+        and target_before is not None
+        and target_after is not None
+        and target_before.character_id in actor_before.finisher_target_ids
+        and target_before.alive
+        and not target_after.alive
+    ):
+        rewards["decisive_finisher"] = config.decisive_finisher_reward
+
+    if (
+        actor_before is not None
+        and actor_before.finisher_target_ids
+        and action_name
+        in {
+            "DashAction",
+            "DisengageAction",
+            "DodgeAction",
+            "EndTurnAction",
+            "GrappleAction",
+            "HelpAction",
+            "HideAction",
+            "ReadyAction",
+            "ShoveAction",
+        }
+    ):
+        rewards["forgone_finisher"] = -config.forgone_finisher_penalty
 
     if action_name == "GrappleAction":
         if _successful_tactical_grapple(before, after, actor_team, action):
@@ -915,6 +957,127 @@ def _available_damage_type_names(character: Any) -> frozenset[str]:
     for item in getattr(character, "inventory", ()) or ():
         damage_types.append(item_damage_type(item))
     return _damage_type_names(set(damage_types))
+
+
+def _available_finisher_target_ids(
+    state: CombatState,
+    actor_id: int,
+    actor: Any,
+) -> frozenset[int]:
+    if not actor.is_alive or not actor.action_economy.action_available:
+        return frozenset()
+
+    target_ids: set[int] = set()
+    for target_id, target in enumerate(state.characters):
+        if target_id == actor_id or target.team is actor.team or not target.is_alive:
+            continue
+        distance = _distance(actor.position, target.position)
+        if any(
+            distance <= int(getattr(weapon, "range", 0))
+            and _effective_damage_potential(
+                _damage_potential(getattr(weapon, "damage", 0))
+                + int(weapon.damage_modifier(actor)),
+                getattr(weapon, "damage_type", None),
+                target,
+            )
+            >= target.hp
+            for weapon in getattr(actor, "weapons", ())
+        ):
+            target_ids.add(target_id)
+            continue
+
+        for spell in _available_offensive_action_spells(actor):
+            if distance > int(getattr(spell, "range", 0)):
+                continue
+            if not _target_has_line_of_sight(state, actor.position, target.position):
+                continue
+            potential = _spell_damage_potential(actor, spell)
+            if _effective_damage_potential(
+                potential,
+                getattr(spell, "damage_type", None),
+                target,
+            ) >= target.hp:
+                target_ids.add(target_id)
+                break
+    return frozenset(target_ids)
+
+
+def _available_offensive_action_spells(actor: Any) -> tuple[Any, ...]:
+    spells: list[Any] = []
+    seen: set[str] = set()
+    for spell in (
+        *tuple(getattr(actor, "cantrips", ()) or ()),
+        *tuple(getattr(actor, "prepared_spells", ()) or ()),
+        *tuple(getattr(actor, "abilities", ()) or ()),
+    ):
+        name = _lookup_key(getattr(spell, "name", ""))
+        if (
+            not name
+            or name in seen
+            or getattr(spell, "damage", None) is None
+            or getattr(spell, "action_cost", "action") != "action"
+            or getattr(spell, "target_type", "enemy") not in {"enemy", "point"}
+            or not getattr(spell, "available", True)
+        ):
+            continue
+        spell_level = int(getattr(spell, "spell_level", 0))
+        if spell_level > 0 and not any(
+            int(level) >= spell_level and int(count) > 0
+            for level, count in getattr(actor, "spell_slots_remaining", {}).items()
+        ):
+            continue
+        seen.add(name)
+        spells.append(spell)
+    return tuple(spells)
+
+
+def _spell_damage_potential(actor: Any, spell: Any) -> int:
+    base_level = int(getattr(spell, "spell_level", 0))
+    cast_level = base_level
+    if base_level > 0:
+        cast_level = max(
+            (
+                int(level)
+                for level, count in getattr(actor, "spell_slots_remaining", {}).items()
+                if int(level) >= base_level and int(count) > 0
+            ),
+            default=base_level,
+        )
+    potential = _damage_potential(getattr(spell, "damage", 0))
+    upcast = getattr(spell, "upcast_damage_per_level", None)
+    if upcast is not None and cast_level > base_level:
+        potential += (cast_level - base_level) * _damage_potential(upcast)
+    return potential
+
+
+def _effective_damage_potential(
+    potential: int,
+    damage_type: object,
+    target: Any,
+) -> int:
+    normalized = coerce_damage_type(damage_type)
+    if normalized is None:
+        return max(0, potential)
+    if normalized in character_immunities(target):
+        return 0
+    if normalized in character_resistances(target):
+        potential //= 2
+    if normalized in character_vulnerabilities(target):
+        potential *= 2
+    return max(0, potential)
+
+
+def _target_has_line_of_sight(
+    state: CombatState,
+    start: Position,
+    end: Position,
+) -> bool:
+    grid_map = state.grid_map
+    if grid_map is None:
+        return True
+    if not grid_map.line_of_sight(start, end):
+        return False
+    return getattr(grid_map.get_cover_between(start, end), "name", "") != "FULL_COVER"
 
 
 def _max_cover_from_enemies(state: CombatState, character: Any) -> int:

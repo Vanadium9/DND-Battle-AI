@@ -23,6 +23,16 @@ def test_fallback_agent_selects_legal_action() -> None:
     assert service.get_policy_name() == "Fallback: random_legal"
 
 
+def test_enemy_without_checkpoint_uses_aggressive_training_baseline() -> None:
+    state = _state(turn_index=1)
+    service = BattleAIService(seed=7)
+
+    action = service.select_action(state, actor_id=1)
+
+    assert action.is_valid(state)
+    assert not isinstance(action, EndTurnAction)
+
+
 def test_missing_checkpoint_reports_clear_error() -> None:
     service = BattleAIService()
     missing_path = _checkpoint_path("missing_checkpoint")
@@ -59,6 +69,23 @@ def test_loaded_gnn_model_is_used_for_action_selection() -> None:
     assert isinstance(action, EndTurnAction)
 
 
+def test_loaded_player_policy_does_not_control_enemy_without_enemy_checkpoint() -> None:
+    checkpoint_path = _checkpoint_path("player_only_policy")
+    model = _end_turn_gnn_model()
+    torch.save({"model_state_dict": model.state_dict()}, checkpoint_path)
+    service = BattleAIService(seed=7)
+    service.load_checkpoint(checkpoint_path, "gnn")
+    player_state = _state()
+    enemy_state = _state(turn_index=1)
+
+    player_action = service.select_action(player_state, actor_id=0)
+    enemy_action = service.select_action(enemy_state, actor_id=1)
+
+    assert isinstance(player_action, EndTurnAction)
+    assert enemy_action.is_valid(enemy_state)
+    assert not isinstance(enemy_action, EndTurnAction)
+
+
 def test_loaded_policy_illegal_action_falls_back_to_legal_action(monkeypatch) -> None:
     checkpoint_path = _checkpoint_path("illegal_policy")
     model = _end_turn_mlp_model()
@@ -91,13 +118,14 @@ def test_model_service_loads_checkpoint_for_gui_settings() -> None:
     assert isinstance(action, EndTurnAction)
 
 
-def _state() -> CombatState:
+def _state(*, turn_index: int = 0) -> CombatState:
     return CombatState(
         characters=[
             FighterArcher(Position(0, 0)),
             Goblin(Position(3, 0)),
         ],
         grid_map=GridMap(width=8, height=8),
+        turn_index=turn_index,
     )
 
 

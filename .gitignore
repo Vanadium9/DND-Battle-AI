@@ -10,6 +10,6 @@ __pycache__/
 
 checkpoints/
 
-.docx
+*.docx
 
 report_docx_extracted.txt

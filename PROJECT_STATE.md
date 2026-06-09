@@ -3627,3 +3627,220 @@ ROADMAP должен обновиться:
 Проверка:
 - `PYTHONDONTWRITEBYTECODE=1 python -m pytest`
 - результат полного прогона: `349 passed`
+
+## 101. Русификация боевого лога и фильтрация панели заклинаний
+
+Промт:
+- сделать боевой лог в интерфейсе боя полностью русским, без служебных английских слов
+- в колонке заклинаний показывать только заклинания и способности, которыми текущий персонаж реально владеет и может применить
+- перепроверить tooltip'ы действий и перевести префиксы/названия заклинаний на русский
+
+Изменения:
+- `ActionPanel` больше не рисует фиксированные недоступные слоты `Second Wind`, `Action Surge`, `Preserve Life` в колонке `Spells`
+- колонка `Spells` теперь наполняется только легальными spell/class-feature options из `ManualActionBuilder`
+- `ui.text` расширен переводами для `Spell:`, `Item:`, `Class Feature:`, `slot`, классовых способностей, preset-персонажей и основных фраз combat log
+- `translate_battle_log()` теперь применяет замены по убыванию длины фразы, чтобы длинные боевые фразы не ломались короткими заменами
+- добавлены тесты на отсутствие чужих class features у волшебника в панели заклинаний, перевод tooltip'ов и перевод основных терминов боевого лога
+
+Проверка:
+- `PYTHONDONTWRITEBYTECODE=1 python -m pytest src/tests/test_manual_action_builder.py src/tests/test_gui_smoke.py`
+- `PYTHONDONTWRITEBYTECODE=1 python -m pytest`
+- результат полного прогона: `352 passed`
+
+## 102. Экспорт метрик обучения в CSV
+
+Промт:
+- исправить ошибку `unrecognized arguments: --metrics-csv`
+- добавить в `scripts/train_ppo.py` параметр `--metrics-csv`
+- сохранять метрики обучения в CSV для построения графика роста награды
+
+Изменения:
+- `train_ppo.py`:
+  - добавлен аргумент `--metrics-csv`
+  - относительный путь CSV разрешается от корня проекта
+  - на каждом отчётном update записывается строка с `average_step_reward`, win rate, losses, entropy, checkpoint и curriculum-метриками
+  - при первом создании CSV автоматически создаётся заголовок и родительская папка
+- `test_train_ppo_script.py`:
+  - добавлен тест записи CSV и наличия `average_step_reward`
+
+Проверка:
+- `python scripts/train_ppo.py --help`
+
+## 105. Test suite cleanup
+
+Prompt:
+- Analyze all tests and remove or merge obviously useless duplicated tests.
+
+Changes:
+- Removed `test_required_behaviors.py`; its broad smoke checks duplicated focused action, environment, observation, and model tests.
+- Removed `test_common_actions_dnd5e.py`; the unique Hide vs passive Perception check was moved into `test_common_actions_behavior.py`.
+- Merged `test_grid_map.py` into `test_map_terrain_cover.py`.
+- Reduced `test_imports.py` to a package-level import smoke test.
+- Reduced `test_combat_structure.py` to architecture-level checks only.
+- Made the training metrics CSV test use an isolated generated file instead of touching a real checkpoint metrics file.
+
+Verification:
+- `python -m pytest`
+- Result: `340 passed`
+
+## 106. Aggressive enemy AI fallback for GUI battles
+
+Prompt:
+- Until a trained enemy AI model exists, enemies in GUI simulations should use the same aggressive AI baseline used as the opponent during player training, because enemies currently stand still.
+
+Changes:
+- `BattleAIService` now routes `Team.ENEMIES` actors to `training.aggressive_combat_policy()` instead of the generic GUI fallback.
+- Loaded player policy checkpoints continue to control player-side actors, but no longer control enemies implicitly.
+- Added regression tests that verify enemies choose a valid non-EndTurn aggressive action without an enemy checkpoint and while a player checkpoint is loaded.
+
+Verification:
+- `python -m pytest src/tests/test_inference_services.py src/tests/test_gui_smoke.py`
+- Result: `19 passed`
+- `python -m pytest`
+- Result: `342 passed`
+- `python -m pytest src/tests/test_train_ppo_script.py`
+- результат: `17 passed`
+
+## 103. Исправление падения PPO update на masked slot_level
+
+Промт:
+- обучение упало с ошибкой `ValueError: actions contain a masked slot_level`
+- при этом на второй стадии curriculum наблюдались частые таймауты и проигрыши игроков
+
+Изменения:
+- `RolloutBuffer.append()` теперь санитизирует сохраняемые action head индексы по training masks
+- если вспомогательный head вроде `slot_level` выбран вне допустимой маски, в rollout сохраняется первый допустимый индекс, обычно `0`
+- это защищает PPO update от падения на неиспользуемых параметрах иерархического действия
+- добавлен regression-тест на masked auxiliary head
+
+Проверка:
+- `python -m pytest src/tests/test_ppo_trainer.py src/tests/test_gnn_ppo_model.py`
+- результат: `25 passed`
+- короткий smoke-запуск `train_ppo.py` на 2 update прошёл без ошибки `masked slot_level`
+
+## 104. Масштабирование лимита шагов эпизода по числу существ
+
+Промт:
+- слишком много таймаутов в обучении
+- максимальное количество шагов боя должно повышаться пропорционально количеству существ на поле
+
+Изменения:
+- `train_ppo.py`:
+  - добавлен параметр `--max-episode-steps-per-creature`
+  - значение по умолчанию: `64`
+  - эффективный лимит эпизода теперь считается как `max(--max-episode-steps, creatures * --max-episode-steps-per-creature)`
+- `PPOTrainer.collect_rollout()`:
+  - принимает `max_episode_steps_per_creature`
+  - считает timeout отдельно для текущего окружения по числу существ в `CombatState`
+- добавлен тест масштабируемого timeout по числу существ
+
+Проверка:
+- `python -m pytest src/tests/test_ppo_trainer.py src/tests/test_train_ppo_script.py`
+- результат: `39 passed`
+- `python scripts/train_ppo.py --help`
+
+## 107. Поэтапное обучение классов
+
+Prompt:
+- Реализовать всё необходимое для поэтапного обучения Fighter, Cleric и Wizard одной общей GNN PPO-модели.
+
+Changes:
+- Добавлен отдельный классовый curriculum из 14 стадий:
+  - Fighter fundamentals и Champion;
+  - Cleric spellcasting и Life Domain support;
+  - Wizard spellcasting, AoE и damage types;
+  - совместная интеграция партии на картах с cover, obstacles и difficult terrain.
+- PPO update фильтрует переходы по целевому классу текущего сценария.
+- Для ещё не обученных союзных классов используется эвристическая aggressive policy.
+- После завершения класса его союзники управляются замороженной копией общей модели.
+- Добавлен rehearsal прошлых стадий с настраиваемой вероятностью.
+- Rehearsal-эпизоды не влияют на условие перехода текущей стадии.
+- Curriculum ограничен одним переходом за PPO update.
+- Состояние классового curriculum и список завершённых классов сохраняются в checkpoint.
+- После завершения классовых фаз сохраняются `gnn_fighter_policy.pt`, `gnn_cleric_policy.pt` и `gnn_wizard_policy.pt`.
+- Добавлены CLI-параметры:
+  - `--class-curriculum`;
+  - `--class-curriculum-config`;
+  - `--ally-policy`;
+  - `--ally-checkpoint`;
+  - `--ally-model-type`.
+- Добавлен конфиг `configs/train_class_curriculum.yaml`.
+
+Verification:
+- targeted pytest: `58 passed`
+- class curriculum smoke training: 1 PPO update completed successfully
+
+## 108. Исправление деградации на стадии Cleric resources
+
+Prompt:
+- Проанализировать завершённое классовое обучение, исправить застревание на пятой стадии и подготовить корректное продолжение обучения.
+
+Changes:
+- Исправлена передача терминального исхода обучаемой стороне:
+  - поражение теперь добавляет штраф последнему обучаемому переходу игроков;
+  - timeout также добавляет отдельный штраф;
+  - ранее поражение рассчитывалось на ходе врага и исключалось из PPO update вместе с переходом врага.
+- Rehearsal снижен с `20%` до `5%`.
+- На первых двух стадиях Cleric и Wizard rehearsal отключён полностью.
+- На совместных интеграционных стадиях rehearsal ограничен `10%`.
+- Стадия `Cleric resources` упрощена:
+  - Fighter + Cleric level 2;
+  - два Goblin Melee;
+  - удалено смешанное давление Bandit до освоения базового spellcasting.
+- Порог перехода классового curriculum снижен с `0.70` до `0.65`.
+- Добавлено автоматическое сохранение лучшего checkpoint каждой стадии по оконной доле побед.
+- Добавлены тесты терминального штрафа, timeout penalty и отключения rehearsal на старте нового класса.
+- Исправлена потеря `training_classes` при преобразовании сгенерированного `CombatState` в `CombatEnvironment`.
+  До исправления Fighter ошибочно занимал около половины обучающих переходов на стадии Cleric.
+- Добавлен `scripts/train_class_curriculum_resume.ps1` для безопасного продолжения от checkpoint завершённой фазы Fighter.
+
+## 109. Полное пространство действий для spellcaster и integration stages
+
+Prompt:
+- Исправить ложное обучение Wizard/Cleric через fast action masks.
+- Удалить `scripts/train_class_curriculum_resume.ps1`; команды запуска предоставлять сообщением.
+
+Changes:
+- `--fast-action-masks` и `--fast-observation` в class curriculum теперь действуют только на Fighter stages.
+- Cleric, Wizard и integration stages автоматически используют полные action masks и observation.
+- Победа на стадии Cleric/Wizard засчитывается в curriculum window только если целевой класс успешно применил:
+  - `CastSpellAction`;
+  - `ChannelDivinityPreserveLifeAction`.
+- Добавлено стартовое логирование `fast_mode=fighter_stages_only`.
+- Удалён `scripts/train_class_curriculum_resume.ps1`.
+
+## 110. Исправление masked slot_level при переходе Cleric -> Wizard
+
+Prompt:
+- Обучение упало после перехода на Wizard с `ValueError: actions contain a masked slot_level`.
+
+Changes:
+- Маски rollout теперь сохраняются как независимые копии тензоров.
+- Исключено изменение ранее сохранённой маски через общий tensor storage.
+- Перед PPO evaluation добавлена финальная санитарная проверка сохранённых action head индексов по соответствующим маскам.
+- Недопустимый вспомогательный индекс заменяется первым допустимым значением; для пустой auxiliary mask используется индекс `0`, который модель также использует как fallback.
+- Добавлен regression-тест независимости сохранённой маски.
+
+## 111. Актуальный checkpoint в GUI
+
+Prompt:
+- Сделать так, чтобы графический интерфейс автоматически загружал текущий checkpoint `gnn_class_curriculum_v3.pt`.
+
+Changes:
+- Путь GUI по умолчанию изменён на `checkpoints/gnn_class_curriculum_v3.pt`.
+- Старый сохранённый путь `checkpoints/gnn_ppo_actor_critic.pt` автоматически мигрирует на актуальный checkpoint.
+- Обновлён `data/settings.json`.
+- Добавлен тест миграции старых настроек.
+
+## 112. Более решительное поведение при возможности добивания
+
+Prompt:
+- Исправить чрезмерно осторожное поведение обученной модели: волшебник выбирает отход даже тогда, когда может сразу убить противника заклинанием.
+
+Changes:
+- Reward snapshot теперь определяет доступные потенциально смертельные атаки оружием и заклинаниями с учётом дальности, видимости, полного укрытия, ячеек заклинаний и типов урона.
+- За убийство цели, которая могла быть добита текущим действием, добавлен небольшой отдельный бонус.
+- За расход основного действия на Dodge, Disengage, Dash, Hide, Help, Ready, Grapple, Shove или End Turn при наличии добивания добавлен штраф.
+- Обычное перемещение не штрафуется, поскольку после него персонаж ещё может атаковать или применить заклинание.
+- Базовые веса победы, поражения и полученного урона оставлены без изменений.
+- Добавлены тесты добивания заклинанием и отказа от добивания ради Disengage.

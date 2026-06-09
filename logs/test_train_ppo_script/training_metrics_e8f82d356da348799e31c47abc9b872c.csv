@@ -1,0 +1,2 @@
+update,rollout_steps,episodes_finished,completed,timeouts,trained_win_rate,opponent_win_rate,average_step_reward,policy_loss,value_loss,entropy,loss,checkpoint,curriculum_level,curriculum_stage,curriculum_window_size,curriculum_window_win_rate,curriculum_threshold,curriculum_updates_on_level,curriculum_kind,training_classes
+7,3,1,1,0,1.0,0.0,0.25,0.1,0.2,0.3,0.4,model.pt,,,,,,,,

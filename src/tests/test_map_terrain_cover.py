@@ -59,6 +59,42 @@ def test_blocked_cell_is_not_available_for_movement() -> None:
     )
 
 
+def test_grid_map_bounds_distance_and_neighbors() -> None:
+    grid_map = GridMap(width=3, height=2)
+
+    assert grid_map.in_bounds(Position(0, 0))
+    assert grid_map.in_bounds(Position(2, 1))
+    assert not grid_map.in_bounds(Position(3, 1))
+    assert not grid_map.in_bounds(Position(1, -1))
+    assert grid_map.manhattan_distance(Position(0, 0), Position(2, 1)) == 3
+    assert set(grid_map.neighbors(Position(0, 0))) == {
+        Position(1, 0),
+        Position(0, 1),
+    }
+
+
+def test_grid_map_occupancy_ignores_defeated_creatures_for_movement() -> None:
+    grid_map = GridMap(width=5, height=5)
+    hero = make_character("Hero", Position(2, 2), Team.PLAYERS)
+    blocker = make_character("Blocker", Position(3, 2), Team.ENEMIES)
+    defeated = make_character("Defeated", Position(2, 3), Team.ENEMIES)
+    defeated.hp = 0
+    defeated.max_hp = 10
+
+    characters = [hero, blocker, defeated]
+
+    assert grid_map.is_occupied(Position(3, 2), characters)
+    assert not grid_map.is_occupied(Position(2, 3), characters)
+
+    movement_cells = grid_map.movement_cells(hero.position, hero.speed, characters)
+
+    assert Position(2, 2) in movement_cells
+    assert Position(2, 3) in movement_cells
+    assert Position(3, 2) not in movement_cells
+    assert Position(2, 4) in movement_cells
+    assert Position(4, 4) not in movement_cells
+
+
 def test_difficult_terrain_spends_extra_movement() -> None:
     hero = make_character("Hero", Position(0, 0), Team.PLAYERS)
     state = CombatState(

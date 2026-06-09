@@ -1,5 +1,5 @@
 {
-  "checkpoint_path": "checkpoints/gnn_ppo_actor_critic.pt",
+  "checkpoint_path": "checkpoints/gnn_class_curriculum_v3.pt",
   "model_type": "gnn",
   "fallback_agent": "rule_based",
   "animation_speed": 600,

@@ -70,6 +70,30 @@ checkpoints/gnn_ppo_actor_critic.pt
 .\.venv\Scripts\python.exe scripts\train_ppo.py --updates 150 --rollout-steps 1024 --max-episode-steps 128 --minibatch-size 256 --update-epochs 4 --model-type gnn --device auto --num-envs 16 --curriculum --curriculum-level 7 --curriculum-max-level 13 --log-interval 5
 ```
 
+Поэтапное обучение классов одной общей GNN PPO-модели:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\train_ppo.py --updates 600 --rollout-steps 1024 --max-episode-steps 128 --max-episode-steps-per-creature 64 --minibatch-size 256 --update-epochs 4 --model-type gnn --device auto --num-envs 16 --fast-action-masks --fast-observation --class-curriculum --train-side players --opponent-policy aggressive --ally-policy adaptive --metrics-csv logs\class_training_metrics.csv --log-interval 5
+```
+
+Классовый curriculum последовательно обучает Fighter, Cleric и Wizard, после чего выполняет совместное дообучение партии. PPO обновляется только на переходах текущего целевого класса. Уже завершённые классы управляются замороженной копией общей модели, ещё не обученные союзники - эвристической политикой. На первых стадиях нового класса повторение отключено, на последующих используется не более `5%` старых сценариев, а на интеграции партии - `10%`. Поражение и timeout дополнительно передаются последнему обучаемому переходу команды. Fast masks/observation автоматически используются только на стадиях Fighter: Cleric, Wizard и интеграция всегда получают полное пространство заклинаний, предметов, целей, укрытий и видимости. Победа на стадии Cleric/Wizard засчитывается для перехода только после успешного применения заклинания или классовой магической способности целевым классом. Настройки находятся в `configs/train_class_curriculum.yaml`.
+
+Для каждой стадии автоматически сохраняется лучший снимок по оконной доле побед:
+
+```text
+checkpoints/gnn_class_stage_<номер>_best.pt
+```
+
+После завершения классовой фазы дополнительно сохраняются:
+
+```text
+checkpoints/gnn_fighter_policy.pt
+checkpoints/gnn_cleric_policy.pt
+checkpoints/gnn_wizard_policy.pt
+```
+
+Основным checkpoint для продолжения обучения и GUI остаётся `checkpoints/gnn_ppo_actor_critic.pt`.
+
 Важные параметры:
 
 - `--device auto` использует CUDA, если доступна.
@@ -78,6 +102,8 @@ checkpoints/gnn_ppo_actor_critic.pt
 - `--fast-action-masks` и `--fast-observation` ускоряют warm-up, но скрывают часть тактических признаков. Для финального обучения и оценки их лучше отключать.
 - `win_rate` считается как доля завершённых побед команды игроков среди завершённых эпизодов. Timeout не считается победой.
 - `checkpoint_status` в стартовом логе показывает, был ли checkpoint загружен или обучение началось fresh.
+- `--class-curriculum` включает отдельные фазы классов и совместную интеграцию.
+- `--ally-policy adaptive` использует эвристику для новых союзных классов и замороженную модель для уже освоенных.
 
 ## Оценка
 

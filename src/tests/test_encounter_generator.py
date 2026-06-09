@@ -1,4 +1,5 @@
 from combat import (
+    CLASS_CURRICULUM_STAGES,
     CURRICULUM_STAGES,
     CombatEnvironment,
     CombatState,
@@ -147,3 +148,55 @@ def test_mixed_party_curriculum_intro_limits_enemy_pressure() -> None:
     assert len(enemies) == 2
     assert {enemy.name for enemy in enemies} == {"Orc Warrior", "Goblin Melee"}
     assert all("Archer" not in enemy.name for enemy in enemies)
+
+
+def test_class_curriculum_has_separate_class_and_integration_phases() -> None:
+    assert len(CLASS_CURRICULUM_STAGES) == 14
+    assert [stage.phase for stage in CLASS_CURRICULUM_STAGES[:3]] == ["fighter"] * 3
+    assert [stage.phase for stage in CLASS_CURRICULUM_STAGES[3:6]] == ["cleric"] * 3
+    assert [stage.phase for stage in CLASS_CURRICULUM_STAGES[6:9]] == ["wizard"] * 3
+    assert all(stage.phase == "integration" for stage in CLASS_CURRICULUM_STAGES[9:])
+
+
+def test_first_stage_of_new_class_disables_rehearsal() -> None:
+    generator = EncounterGenerator(
+        seed=4,
+        curriculum_level=4,
+        curriculum_kind="class",
+        rehearsal_probability=1.0,
+    )
+
+    state = generator.generate_curriculum_state()
+
+    assert state.curriculum_is_rehearsal is False
+    assert state.curriculum_source_level == 4
+    assert state.training_classes == ("Cleric",)
+
+
+def test_cleric_resource_stage_uses_only_melee_goblins() -> None:
+    generator = EncounterGenerator(
+        seed=5,
+        curriculum_level=5,
+        curriculum_kind="class",
+    )
+
+    state = generator.generate_curriculum_state()
+    enemies = state.characters_for_team(Team.ENEMIES)
+
+    assert state.training_classes == ("Cleric",)
+    assert len(enemies) == 2
+    assert {enemy.name for enemy in enemies} == {"Goblin Melee"}
+
+
+def test_curriculum_environment_preserves_target_class_metadata() -> None:
+    generator = EncounterGenerator(
+        seed=6,
+        curriculum_level=4,
+        curriculum_kind="class",
+    )
+
+    environment = generator.generate_curriculum_environment(log_to_console=False)
+
+    assert environment.combat_state.training_classes == ("Cleric",)
+    assert environment.combat_state.curriculum_source_level == 4
+    assert environment.combat_state.curriculum_is_rehearsal is False

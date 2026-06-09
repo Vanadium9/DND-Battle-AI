@@ -295,6 +295,74 @@ def test_reward_adds_disengage_bonus_when_actor_was_in_danger() -> None:
     assert reward.breakdown["tactical_disengage"] > 0
 
 
+def test_reward_penalizes_disengage_when_wizard_can_finish_enemy() -> None:
+    actor = make_character("Wizard", Position(0, 0), Team.PLAYERS, hp=7, max_hp=7)
+    spell = SpellAbility(
+        name="Magic Missile",
+        range=6,
+        spell_level=1,
+        action_cost="action",
+        target_type="enemy",
+        damage="1d4+1",
+        damage_type=DamageType.FORCE,
+    )
+    actor.prepared_spells = [spell]
+    actor.spell_slots = {1: 1}
+    actor.spell_slots_remaining = {1: 1}
+    target = make_character("Target", Position(1, 0), Team.ENEMIES, hp=4, max_hp=10)
+    state = make_state(actor, target)
+    action = DisengageAction(actor_id=0)
+    before = snapshot_combat_state(state)
+
+    result = action.execute(state)
+    reward = calculate_combat_reward(
+        before,
+        snapshot_combat_state(state),
+        actor_team=Team.PLAYERS,
+        action=action,
+        action_result=result,
+    )
+
+    assert before.characters[0].finisher_target_ids == frozenset({1})
+    assert reward.breakdown["forgone_finisher"] < 0
+    assert reward.breakdown["forgone_finisher"] + reward.breakdown["tactical_disengage"] < 0
+
+
+def test_reward_adds_decisive_finisher_bonus_for_lethal_spell() -> None:
+    actor = make_character("Wizard", Position(0, 0), Team.PLAYERS)
+    spell = SpellAbility(
+        name="Magic Missile",
+        range=6,
+        spell_level=1,
+        action_cost="action",
+        target_type="enemy",
+        damage="1d4+1",
+        damage_type=DamageType.FORCE,
+    )
+    actor.prepared_spells = [spell]
+    actor.spell_slots = {1: 1}
+    actor.spell_slots_remaining = {1: 1}
+    target = make_character("Target", Position(1, 0), Team.ENEMIES, hp=4, max_hp=10)
+    state = make_state(actor, target)
+    action = CastSpellAction(actor_id=0, target_id=1, spell=spell)
+    before = snapshot_combat_state(state)
+    actor.spell_slots_remaining[1] = 0
+    target.hp = 0
+
+    reward = calculate_combat_reward(
+        before,
+        snapshot_combat_state(state),
+        actor_team=Team.PLAYERS,
+        action=action,
+        action_result=ActionResult(True, "Wizard casts Magic Missile for 4 damage."),
+    )
+
+    assert reward.breakdown["decisive_finisher"] > 0
+    assert reward.breakdown["decisive_finisher"] > abs(
+        reward.breakdown["spell_slot_spent"]
+    )
+
+
 def test_reward_penalizes_common_actions_without_tactical_value(monkeypatch) -> None:
     actor = make_character("Actor", Position(0, 0), Team.PLAYERS)
     enemy = make_character("Enemy", Position(1, 0), Team.ENEMIES)

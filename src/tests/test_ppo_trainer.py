@@ -7,6 +7,7 @@ from agents import (
     MAIN_ACTION_TYPE_COUNT,
     GNNPPOActorCritic,
     HEAD_ORDER,
+    MainActionType,
     PPOActorCritic,
 )
 from combat import (
@@ -182,6 +183,22 @@ def test_episode_step_timeout_persists_across_rollouts() -> None:
     assert first.episode_timeouts == 0
     assert second.episode_timeouts == 1
     assert second.dones[-1] is True
+    assert trainer.episode_steps_by_env[0] == 0
+
+
+def test_scaled_episode_step_timeout_uses_creature_count() -> None:
+    trainer = make_timeout_trainer(rollout_steps=1)
+
+    first = trainer.collect_rollout(max_episode_steps_per_creature=2)
+    second = trainer.collect_rollout(max_episode_steps_per_creature=2)
+    third = trainer.collect_rollout(max_episode_steps_per_creature=2)
+    fourth = trainer.collect_rollout(max_episode_steps_per_creature=2)
+
+    assert first.episode_timeouts == 0
+    assert second.episode_timeouts == 0
+    assert third.episode_timeouts == 0
+    assert fourth.episode_timeouts == 1
+    assert fourth.dones[-1] is True
     assert trainer.episode_steps_by_env[0] == 0
 
 
@@ -408,6 +425,62 @@ def test_gnn_trainer_pads_all_policy_head_masks() -> None:
         assert data["masks"][key][:, 0].all()
 
 
+def test_rollout_sanitizes_masked_auxiliary_head_actions() -> None:
+    rollout = RolloutBuffer()
+    observation = torch.zeros(4)
+    action = {
+        "action_category": torch.tensor(0),
+        "main_action_type": torch.tensor(0),
+        "target_index": torch.tensor(0),
+        "move_index": torch.tensor(0),
+        "option_index": torch.tensor(0),
+        "slot_level": torch.tensor(3),
+        "log_prob": torch.tensor(0.0),
+        "value": torch.tensor(0.0),
+    }
+    masks = {
+        "action_category": torch.tensor([True]),
+        "main_action_type": torch.tensor([True]),
+        "target_index": torch.tensor([True]),
+        "move_index": torch.tensor([True]),
+        "option_index": torch.tensor([True]),
+        "slot_level": torch.tensor([True, False, False, False]),
+    }
+
+    rollout.append(observation, action, reward=0.0, done=False, masks=masks)
+
+    assert rollout.actions["slot_level"][0].item() == 0
+
+
+def test_rollout_stores_independent_mask_copy() -> None:
+    rollout = RolloutBuffer()
+    observation = torch.zeros(4)
+    action = {
+        "action_category": torch.tensor(0),
+        "main_action_type": torch.tensor(0),
+        "target_index": torch.tensor(0),
+        "move_index": torch.tensor(0),
+        "option_index": torch.tensor(0),
+        "slot_level": torch.tensor(1),
+        "log_prob": torch.tensor(0.0),
+        "value": torch.tensor(0.0),
+    }
+    slot_mask = torch.tensor([True, True, False, False])
+    masks = {
+        "action_category": torch.tensor([True]),
+        "main_action_type": torch.tensor([True]),
+        "target_index": torch.tensor([True]),
+        "move_index": torch.tensor([True]),
+        "option_index": torch.tensor([True]),
+        "slot_level": slot_mask,
+    }
+
+    rollout.append(observation, action, reward=0.0, done=False, masks=masks)
+    slot_mask[1] = False
+
+    assert rollout.masks["slot_level"][0].tolist() == [True, True, False, False]
+
+
 def test_gnn_trainer_runs_with_centralized_critic_disabled() -> None:
     trainer = make_gnn_trainer(centralized_critic=False)
     rollout = trainer.collect_rollout()
@@ -551,3 +624,199 @@ def test_train_curriculum_config_loads_from_yaml() -> None:
     assert config.max_level == 13
     assert config.win_rate_threshold == 0.75
     assert config.min_updates_per_level == 10
+
+
+def test_class_curriculum_filters_rollout_rows_by_target_class() -> None:
+    trainer = make_trainer()
+    trainer.trainable_teams = {Team.PLAYERS}
+    team_ids = torch.tensor([0, 0, 0, 1])
+    trainable_flags = torch.tensor([True, False, True, False])
+
+    indices = trainer._trainable_indices(team_ids, trainable_flags)
+
+    assert indices.tolist() == [0, 2]
+
+
+def test_class_phase_transition_freezes_completed_class_for_allies() -> None:
+    generator = EncounterGenerator(
+        seed=31,
+        curriculum_level=3,
+        curriculum_kind="class",
+    )
+    environment = generator.generate_curriculum_environment(log_to_console=False)
+    heuristic_ally = aggressive_combat_policy(seed=31)
+    trainer = PPOTrainer(
+        environment=environment,
+        model=PPOActorCritic(target_count=8, move_count=64, hidden_sizes=(32,)),
+        config=PPOConfig(rollout_steps=2, checkpoint_dir=str(CHECKPOINT_DIR)),
+        encounter_generator=generator,
+        curriculum_config=CurriculumConfig(
+            enabled=True,
+            kind="class",
+            initial_level=3,
+            max_level=14,
+            win_rate_threshold=1.0,
+            window_size=1,
+        ),
+        shared_policy=None,
+        enemy_policy=heuristic_ally,
+        ally_policy=heuristic_ally,
+        freeze_completed_class_allies=True,
+        trainable_teams={Team.PLAYERS},
+    )
+
+    trainer.record_curriculum_result(Team.PLAYERS)
+    cleric_state = generator.generate_curriculum_state(4)
+    fighter_id = next(
+        index
+        for index, actor in enumerate(cleric_state.characters)
+        if actor.class_name == "Fighter"
+    )
+    cleric_id = next(
+        index
+        for index, actor in enumerate(cleric_state.characters)
+        if actor.class_name == "Cleric"
+    )
+
+    assert trainer.curriculum_level == 4
+    assert trainer.completed_training_classes == {"Fighter"}
+    assert trainer.frozen_ally_policy is not None
+    assert trainer._policy_for_actor(cleric_state, fighter_id) is trainer.frozen_ally_policy
+    assert trainer._policy_for_actor(cleric_state, cleric_id) is trainer.model
+
+
+def test_curriculum_promotes_at_most_once_before_optimizer_update() -> None:
+    generator = EncounterGenerator(seed=32, curriculum_level=1)
+    trainer = PPOTrainer(
+        environment=generator.generate_curriculum_environment(log_to_console=False),
+        model=PPOActorCritic(target_count=6, move_count=64, hidden_sizes=(32,)),
+        config=PPOConfig(rollout_steps=2, checkpoint_dir=str(CHECKPOINT_DIR)),
+        encounter_generator=generator,
+        curriculum_config=CurriculumConfig(
+            enabled=True,
+            initial_level=1,
+            max_level=4,
+            win_rate_threshold=1.0,
+            window_size=1,
+        ),
+    )
+
+    trainer.record_curriculum_result(Team.PLAYERS)
+    trainer.record_curriculum_result(Team.PLAYERS)
+
+    assert trainer.curriculum_level == 2
+
+
+def test_terminal_defeat_penalty_reaches_last_trainable_player_transition() -> None:
+    trainer = make_trainer()
+    trainer.trainable_teams = {Team.PLAYERS}
+    trainer.curriculum_config = CurriculumConfig(
+        enabled=True,
+        terminal_defeat_penalty=5.0,
+    )
+    rollout = RolloutBuffer(
+        rewards=[0.25, 0.50],
+        env_ids=[0, 0],
+        team_ids=[0, 1],
+        trainable_flags=[True, False],
+    )
+
+    trainer._apply_terminal_training_reward(
+        rollout,
+        0,
+        winner=Team.ENEMIES,
+    )
+
+    assert rollout.rewards == [-4.75, 0.50]
+
+
+def test_timeout_penalty_reaches_last_trainable_transition() -> None:
+    trainer = make_trainer()
+    trainer.curriculum_config = CurriculumConfig(
+        enabled=True,
+        timeout_penalty=1.0,
+    )
+    rollout = RolloutBuffer(
+        rewards=[0.25],
+        env_ids=[0],
+        team_ids=[0],
+        trainable_flags=[True],
+    )
+
+    trainer._apply_terminal_training_reward(
+        rollout,
+        0,
+        winner=None,
+        timeout=True,
+    )
+
+    assert rollout.rewards == [-0.75]
+
+
+def test_class_curriculum_uses_full_masks_for_cleric_even_with_fast_flag() -> None:
+    generator = EncounterGenerator(
+        seed=33,
+        curriculum_level=4,
+        curriculum_kind="class",
+    )
+    state = generator.generate_curriculum_state()
+    cleric_id = next(
+        index
+        for index, actor in enumerate(state.characters)
+        if actor.class_name == "Cleric"
+    )
+    state.turn_index = cleric_id
+    trainer = PPOTrainer(
+        environment=generator.generate_curriculum_environment(
+            use_initiative=False,
+            log_to_console=False,
+        ),
+        model=PPOActorCritic(target_count=8, move_count=64, hidden_sizes=(32,)),
+        encounter_generator=generator,
+        curriculum_config=CurriculumConfig(
+            enabled=True,
+            kind="class",
+            initial_level=4,
+            max_level=14,
+        ),
+        fast_action_masks=True,
+        fast_observation=True,
+    )
+
+    masks = trainer._build_action_masks(state, cleric_id)
+
+    assert trainer._use_fast_training_mode(state) is False
+    assert masks["main_action_type"][int(MainActionType.CAST_SPELL)]
+
+
+def test_spellcaster_curriculum_win_requires_target_class_activity() -> None:
+    generator = EncounterGenerator(
+        seed=34,
+        curriculum_level=7,
+        curriculum_kind="class",
+    )
+    trainer = PPOTrainer(
+        environment=generator.generate_curriculum_environment(log_to_console=False),
+        model=PPOActorCritic(target_count=8, move_count=64, hidden_sizes=(32,)),
+        encounter_generator=generator,
+        curriculum_config=CurriculumConfig(
+            enabled=True,
+            kind="class",
+            initial_level=7,
+            max_level=14,
+            win_rate_threshold=1.0,
+            window_size=1,
+        ),
+    )
+
+    trainer.record_curriculum_result(
+        Team.PLAYERS,
+        target_class_active=False,
+    )
+    assert trainer.curriculum_level == 7
+
+    trainer.record_curriculum_result(
+        Team.PLAYERS,
+        target_class_active=True,
+    )
+    assert trainer.curriculum_level == 8

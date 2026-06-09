@@ -7,6 +7,7 @@ import pytest
 from inference import CheckpointLoadError
 from ui.services import ModelService
 from ui.settings import (
+    DEFAULT_CHECKPOINT_PATH,
     GuiSettings,
     SettingsLoadError,
     load_gui_settings,
@@ -48,6 +49,18 @@ def test_gui_settings_reports_corrupted_file() -> None:
 
     with pytest.raises(SettingsLoadError, match="Повреждённый файл настроек"):
         load_gui_settings(path)
+
+
+def test_gui_settings_migrates_legacy_checkpoint_to_current_policy() -> None:
+    path = _settings_path("legacy_checkpoint")
+    path.write_text(
+        json.dumps({"checkpoint_path": "checkpoints/gnn_ppo_actor_critic.pt"}),
+        encoding="utf-8",
+    )
+
+    loaded = load_gui_settings(path)
+
+    assert loaded.checkpoint_path == DEFAULT_CHECKPOINT_PATH
 
 
 def test_model_service_falls_back_after_corrupted_settings() -> None:

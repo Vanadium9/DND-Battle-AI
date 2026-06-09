@@ -1,0 +1,20 @@
+enabled: true
+kind: class
+initial_level: 1
+max_level: 14
+win_rate_threshold: 0.65
+window_size: 30
+min_updates_per_level: 15
+rehearsal_probability: 0.05
+terminal_defeat_penalty: 5.0
+timeout_penalty: 1.0
+
+phases:
+  - name: fighter
+    levels: [1, 2, 3]
+  - name: cleric
+    levels: [4, 5, 6]
+  - name: wizard
+    levels: [7, 8, 9]
+  - name: integration
+    levels: [10, 11, 12, 13, 14]
